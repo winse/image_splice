@@ -65,6 +65,19 @@
       box-shadow: 0 6px 16px rgba(27, 42, 58, 0.1);
     }
 
+    .tool-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tool-divider {
+      width: 1px;
+      height: 24px;
+      background: #c9d7e6;
+      margin: 0 2px;
+    }
+
     button {
       border: 1px solid var(--line);
       background: #fff;
@@ -109,8 +122,7 @@
     }
 
     canvas {
-      max-width: 100%;
-      height: auto;
+      max-width: none;
       display: block;
       background: #fff;
     }
@@ -144,15 +156,28 @@
   <div class="wrap">
     <section class="panel">
       <h1 class="title">图片粘贴裁剪接续工具</h1>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片。拖拽选择区间：普通拖拽=重置区间，<b>Ctrl</b> 拖拽=增加区间，<b>Shift</b> 拖拽=从已有区间减掉。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片。拖拽选择区间：普通拖拽=重置区间，<b>Ctrl</b> 拖拽=增加区间，<b>Shift</b> 拖拽=从已有区间减掉。点“矩形马赛克”后拖拽矩形可打码（快捷键 <b>Ctrl + M</b>）。按住 <b>Ctrl</b> + 滚轮可缩放，点“缩放还原 1:1”恢复。</p>
     </section>
 
     <section class="panel toolbar">
-      <button id="btnUndo" disabled>撤销 (Ctrl+Z)</button>
-      <button id="btnRedo" disabled>重做 (Ctrl+Y)</button>
-      <button id="btnCut" class="danger" disabled>删除并接续</button>
-      <button id="btnReset" disabled>恢复到初始图片</button>
-      <button id="btnSave" class="primary" disabled>下载结果 PNG</button>
+      <div class="tool-group">
+        <button id="btnUndo" disabled>撤销 (Ctrl+Z)</button>
+        <button id="btnRedo" disabled>重做 (Ctrl+Y)</button>
+      </div>
+      <div class="tool-divider" aria-hidden="true"></div>
+      <div class="tool-group">
+        <button id="btnMosaic" disabled>矩形马赛克</button>
+        <button id="btnZoomReset" disabled>缩放还原 1:1</button>
+      </div>
+      <div class="tool-divider" aria-hidden="true"></div>
+      <div class="tool-group">
+        <button id="btnCut" class="danger" disabled>删除并接续</button>
+        <button id="btnReset" disabled>恢复到初始图片</button>
+      </div>
+      <div class="tool-divider" aria-hidden="true"></div>
+      <div class="tool-group">
+        <button id="btnSave" class="primary" disabled>下载结果 PNG</button>
+      </div>
       <span id="status" class="status">等待粘贴图片...</span>
     </section>
 
@@ -168,12 +193,15 @@
   <script>
     const canvas = document.getElementById("mainCanvas");
     const ctx = canvas.getContext("2d");
+    const canvasBox = document.querySelector(".canvas-box");
     const empty = document.getElementById("empty");
     const statusEl = document.getElementById("status");
     const metricsEl = document.getElementById("metrics");
 
     const btnUndo = document.getElementById("btnUndo");
     const btnRedo = document.getElementById("btnRedo");
+    const btnMosaic = document.getElementById("btnMosaic");
+    const btnZoomReset = document.getElementById("btnZoomReset");
     const btnCut = document.getElementById("btnCut");
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
@@ -184,9 +212,19 @@
     let dragStartY = null;
     let dragCurrentY = null;
     let dragMode = "replace";
+    let dragType = "range";
     let cutRanges = [];
+    let mosaicArmed = false;
+    let mosaicStart = null;
+    let mosaicCurrent = null;
     const CUT_GAP_PX = 1;
     const CUT_GAP_COLOR = "#ffffff";
+    const MOSAIC_BLOCK = 12;
+    const CLICK_CLEAR_THRESHOLD = 2;
+    const ZOOM_MIN = 0.2;
+    const ZOOM_MAX = 8;
+    const ZOOM_STEP = 0.1;
+    let zoomScale = 1;
     const MAX_HISTORY = 30;
     const undoStack = [];
     const redoStack = [];
@@ -246,7 +284,7 @@
     }
 
     function getPreviewRanges() {
-      if (!selecting) return cutRanges;
+      if (!selecting || dragType !== "range") return cutRanges;
       const draft = normalizeRange(dragStartY, dragCurrentY);
       if (!draft) return cutRanges;
       if (dragMode === "add") return addRange(cutRanges, draft);
@@ -266,19 +304,30 @@
 
     function clearSelection() {
       selecting = false;
+      dragType = "range";
       dragStartY = null;
       dragCurrentY = null;
       dragMode = "replace";
       cutRanges = [];
+      mosaicStart = null;
+      mosaicCurrent = null;
     }
 
     function updateButtons() {
       const hasImage = !!imageData;
       btnUndo.disabled = !hasImage || undoStack.length === 0;
       btnRedo.disabled = !hasImage || redoStack.length === 0;
+      btnMosaic.disabled = !hasImage;
+      btnZoomReset.disabled = !hasImage;
       btnReset.disabled = !hasImage;
       btnSave.disabled = !hasImage;
       btnCut.disabled = !hasImage || !hasSelection();
+    }
+
+    function applyCanvasZoom() {
+      if (!imageData) return;
+      canvas.style.width = `${Math.round(canvas.width * zoomScale)}px`;
+      canvas.style.height = `${Math.round(canvas.height * zoomScale)}px`;
     }
 
     function cloneImageData(src) {
@@ -322,25 +371,62 @@
         parts.push(`<span>区间数: ${ranges.length}</span>`);
         parts.push(`<span>将删除总高度: ${totalSelectedHeight(ranges)}px</span>`);
       }
+      parts.push(`<span>缩放: ${(zoomScale * 100).toFixed(0)}%</span>`);
       if (selecting) {
-        parts.push(`<span>当前模式: ${modeText(dragMode)}</span>`);
+        if (dragType === "range") {
+          parts.push(`<span>当前模式: ${modeText(dragMode)}</span>`);
+        } else if (dragType === "mosaic") {
+          const rect = normalizeRect(mosaicStart, mosaicCurrent);
+          if (rect) {
+            parts.push(`<span>马赛克区域: ${rect.w} x ${rect.h}px</span>`);
+          }
+        }
+      }
+      if (mosaicArmed && !selecting) {
+        parts.push("<span>马赛克模式: 已启用</span>");
       }
       metricsEl.innerHTML = parts.join("");
     }
 
+    function normalizeRect(a, b) {
+      if (!a || !b) return null;
+      const x1 = Math.max(0, Math.min(a.x, b.x));
+      const y1 = Math.max(0, Math.min(a.y, b.y));
+      const x2 = Math.min(canvas.width, Math.max(a.x, b.x));
+      const y2 = Math.min(canvas.height, Math.max(a.y, b.y));
+      const w = Math.max(0, Math.round(x2 - x1));
+      const h = Math.max(0, Math.round(y2 - y1));
+      if (w <= 0 || h <= 0) return null;
+      return { x: Math.round(x1), y: Math.round(y1), w, h };
+    }
+
     function drawSelectionOverlay() {
       const ranges = getPreviewRanges();
-      if (ranges.length === 0) return;
-      for (const r of ranges) {
-        ctx.save();
-        ctx.fillStyle = "rgba(189,45,45,0.22)";
-        ctx.strokeStyle = "rgba(189,45,45,0.9)";
-        ctx.lineWidth = 2;
-        ctx.fillRect(0, r.y1, canvas.width, r.h);
-        if (r.h >= 2) {
-          ctx.strokeRect(1, r.y1 + 1, canvas.width - 2, r.h - 2);
+      if (ranges.length > 0) {
+        for (const r of ranges) {
+          ctx.save();
+          ctx.fillStyle = "rgba(189,45,45,0.22)";
+          ctx.strokeStyle = "rgba(189,45,45,0.9)";
+          ctx.lineWidth = 2;
+          ctx.fillRect(0, r.y1, canvas.width, r.h);
+          if (r.h >= 2) {
+            ctx.strokeRect(1, r.y1 + 1, canvas.width - 2, r.h - 2);
+          }
+          ctx.restore();
         }
-        ctx.restore();
+      }
+
+      if (selecting && dragType === "mosaic") {
+        const rect = normalizeRect(mosaicStart, mosaicCurrent);
+        if (rect) {
+          ctx.save();
+          ctx.fillStyle = "rgba(10,123,131,0.22)";
+          ctx.strokeStyle = "rgba(10,123,131,0.95)";
+          ctx.lineWidth = 2;
+          ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+          ctx.strokeRect(rect.x + 1, rect.y + 1, Math.max(0, rect.w - 2), Math.max(0, rect.h - 2));
+          ctx.restore();
+        }
       }
     }
 
@@ -352,6 +438,7 @@
       }
       canvas.hidden = false;
       empty.hidden = true;
+      applyCanvasZoom();
       ctx.putImageData(imageData, 0, 0);
       drawSelectionOverlay();
       updateButtons();
@@ -365,6 +452,7 @@
       ctx.drawImage(img, 0, 0);
       imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       originalData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      zoomScale = 1;
       clearSelection();
       clearHistory();
       setStatus(`图片已载入: ${canvas.width} x ${canvas.height}`);
@@ -404,17 +492,68 @@
       return (event.clientY - rect.top) * scaleY;
     }
 
+    function getCanvasPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (event.clientX - rect.left) * scaleX,
+        y: (event.clientY - rect.top) * scaleY
+      };
+    }
+
+    function mosaicRectOnCurrentImage(rect, blockSize) {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.putImageData(imageData, 0, 0);
+
+      for (let y = rect.y; y < rect.y + rect.h; y += blockSize) {
+        for (let x = rect.x; x < rect.x + rect.w; x += blockSize) {
+          const bw = Math.min(blockSize, rect.x + rect.w - x);
+          const bh = Math.min(blockSize, rect.y + rect.h - y);
+          const p = tctx.getImageData(x, y, 1, 1).data;
+          tctx.fillStyle = `rgba(${p[0]}, ${p[1]}, ${p[2]}, ${p[3] / 255})`;
+          tctx.fillRect(x, y, bw, bh);
+        }
+      }
+      return tctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+
+    function clampZoom(next) {
+      return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+    }
+
+    function updateZoomByWheel(event) {
+      if (!imageData || !event.ctrlKey) return;
+      event.preventDefault();
+      const dir = event.deltaY < 0 ? 1 : -1;
+      const next = clampZoom(zoomScale + dir * ZOOM_STEP);
+      if (next === zoomScale) return;
+      zoomScale = next;
+      render();
+      setStatus(`当前缩放 ${(zoomScale * 100).toFixed(0)}%`);
+    }
+
     canvas.addEventListener("mousedown", (e) => {
       if (!imageData) return;
       selecting = true;
-      dragStartY = getCanvasY(e);
-      dragCurrentY = dragStartY;
-      if (e.shiftKey) {
-        dragMode = "subtract";
-      } else if (e.ctrlKey || e.metaKey) {
-        dragMode = "add";
+      if (mosaicArmed) {
+        dragType = "mosaic";
+        mosaicStart = getCanvasPoint(e);
+        mosaicCurrent = mosaicStart;
       } else {
-        dragMode = "replace";
+        dragType = "range";
+        dragStartY = getCanvasY(e);
+        dragCurrentY = dragStartY;
+        if (e.shiftKey) {
+          dragMode = "subtract";
+        } else if (e.ctrlKey || e.metaKey) {
+          dragMode = "add";
+        } else {
+          dragMode = "replace";
+        }
       }
       render();
       updateButtons();
@@ -422,33 +561,79 @@
 
     window.addEventListener("mousemove", (e) => {
       if (!selecting || !imageData) return;
-      dragCurrentY = getCanvasY(e);
+      if (dragType === "mosaic") {
+        mosaicCurrent = getCanvasPoint(e);
+      } else {
+        dragCurrentY = getCanvasY(e);
+      }
       render();
       updateButtons();
     });
 
     window.addEventListener("mouseup", () => {
       if (!selecting) return;
-      const draft = normalizeRange(dragStartY, dragCurrentY);
-      if (draft) {
-        if (dragMode === "add") {
-          cutRanges = addRange(cutRanges, draft);
-        } else if (dragMode === "subtract") {
-          cutRanges = subtractRange(cutRanges, draft);
+      if (dragType === "mosaic") {
+        const rect = normalizeRect(mosaicStart, mosaicCurrent);
+        selecting = false;
+        mosaicStart = null;
+        mosaicCurrent = null;
+        if (rect) {
+          pushUndoState();
+          imageData = mosaicRectOnCurrentImage(rect, MOSAIC_BLOCK);
+          mosaicArmed = false;
+          setStatus(`已完成马赛克: x=${rect.x}, y=${rect.y}, ${rect.w}x${rect.h}px`);
         } else {
-          cutRanges = [draft];
+          setStatus("马赛克区域无效，请重新拖拽。");
+        }
+      } else {
+        const isPlainClick = dragMode === "replace"
+          && dragStartY !== null
+          && dragCurrentY !== null
+          && Math.abs(dragCurrentY - dragStartY) <= CLICK_CLEAR_THRESHOLD;
+        const draft = normalizeRange(dragStartY, dragCurrentY);
+        if (isPlainClick) {
+          cutRanges = [];
+        } else if (draft) {
+          if (dragMode === "add") {
+            cutRanges = addRange(cutRanges, draft);
+          } else if (dragMode === "subtract") {
+            cutRanges = subtractRange(cutRanges, draft);
+          } else {
+            cutRanges = [draft];
+          }
+        }
+        selecting = false;
+        dragStartY = null;
+        dragCurrentY = null;
+        if (hasSelection()) {
+          setStatus(`已更新区间：${cutRanges.length} 段，总删除高度 ${totalSelectedHeight(cutRanges)}px`);
+        } else {
+          setStatus("当前没有选中区间。");
         }
       }
-      selecting = false;
-      dragStartY = null;
-      dragCurrentY = null;
       render();
       updateButtons();
-      if (hasSelection()) {
-        setStatus(`已更新区间：${cutRanges.length} 段，总删除高度 ${totalSelectedHeight(cutRanges)}px`);
+    });
+
+    btnMosaic.addEventListener("click", () => {
+      if (!imageData) return;
+      mosaicArmed = !mosaicArmed;
+      if (mosaicArmed) {
+        selecting = false;
+        dragType = "range";
+        setStatus(`马赛克模式已开启：请在图片上拖拽矩形（块大小 ${MOSAIC_BLOCK}px）`);
       } else {
-        setStatus("当前没有选中区间。");
+        setStatus("马赛克模式已关闭。");
       }
+      render();
+      updateButtons();
+    });
+
+    btnZoomReset.addEventListener("click", () => {
+      if (!imageData) return;
+      zoomScale = 1;
+      render();
+      setStatus("缩放已还原到 1:1");
     });
 
     btnCut.addEventListener("click", () => {
@@ -536,6 +721,7 @@
     });
 
     window.addEventListener("paste", handlePaste);
+    canvasBox.addEventListener("wheel", updateZoomByWheel, { passive: false });
     window.addEventListener("keydown", (event) => {
       const key = event.key.toLowerCase();
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
@@ -545,6 +731,13 @@
         if (!btnUndo.disabled) {
           event.preventDefault();
           btnUndo.click();
+        }
+        return;
+      }
+      if (key === "m") {
+        if (!btnMosaic.disabled) {
+          event.preventDefault();
+          btnMosaic.click();
         }
         return;
       }
