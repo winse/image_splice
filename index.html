@@ -165,7 +165,7 @@
   <div class="wrap">
     <section class="panel">
       <h1 class="title">图片粘贴裁剪接续工具</h1>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片。拖拽选择区间：普通拖拽=重置区间，<b>Ctrl</b> 拖拽=增加区间，<b>Shift</b> 拖拽=从已有区间减掉。点“矩形马赛克”后拖拽矩形可打码（快捷键 <b>Ctrl + M</b>）。按住 <b>Ctrl</b> + 滚轮可缩放，点“缩放还原 1:1”恢复。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片。拖拽选择区间：普通拖拽=重置区间，<b>Ctrl</b> 拖拽=增加区间，<b>Shift</b> 拖拽=从已有区间减掉。点“矩形马赛克”后拖拽矩形可打码（快捷键 <b>Ctrl + M</b>）。“画箭头”拖拽绘制箭头，“数字标注”点击放置递增数字。按住 <b>Ctrl</b> + 滚轮可缩放，点“缩放还原 1:1”恢复。</p>
     </section>
 
     <section class="panel toolbar">
@@ -176,6 +176,8 @@
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
         <button id="btnMosaic" disabled>矩形马赛克</button>
+        <button id="btnArrow" disabled>画箭头 (A)</button>
+        <button id="btnNumber" disabled>数字标注 (N)</button>
         <button id="btnZoomReset" disabled>缩放还原 1:1</button>
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
@@ -210,6 +212,8 @@
     const btnUndo = document.getElementById("btnUndo");
     const btnRedo = document.getElementById("btnRedo");
     const btnMosaic = document.getElementById("btnMosaic");
+    const btnArrow = document.getElementById("btnArrow");
+    const btnNumber = document.getElementById("btnNumber");
     const btnZoomReset = document.getElementById("btnZoomReset");
     const btnCut = document.getElementById("btnCut");
     const btnReset = document.getElementById("btnReset");
@@ -226,9 +230,20 @@
     let mosaicArmed = false;
     let mosaicStart = null;
     let mosaicCurrent = null;
+    let arrowArmed = false;
+    let arrowStart = null;
+    let arrowCurrent = null;
+    let numberArmed = false;
+    let numberCounter = 1;
     const CUT_GAP_PX = 1;
     const CUT_GAP_COLOR = "#ffffff";
     const MOSAIC_BLOCK = 12;
+    const MOSAIC_BLUR_RADIUS = 8;
+    const ARROW_COLOR = "#ff3333";
+    const ARROW_WIDTH = 3;
+    const NUMBER_COLOR = "#ff3333";
+    const NUMBER_BG = "#ffffff";
+    const NUMBER_SIZE = 24;
     const CLICK_CLEAR_THRESHOLD = 2;
     const ZOOM_MIN = 0.2;
     const ZOOM_MAX = 8;
@@ -327,6 +342,8 @@
       btnUndo.disabled = !hasImage || undoStack.length === 0;
       btnRedo.disabled = !hasImage || redoStack.length === 0;
       btnMosaic.disabled = !hasImage;
+      btnArrow.disabled = !hasImage;
+      btnNumber.disabled = !hasImage;
       btnZoomReset.disabled = !hasImage;
       btnReset.disabled = !hasImage;
       btnSave.disabled = !hasImage;
@@ -518,15 +535,94 @@
       const tctx = tempCanvas.getContext("2d");
       tctx.putImageData(imageData, 0, 0);
 
+      // 组合式马赛克：先模糊再块化
+      // 简化版：使用块平均色
       for (let y = rect.y; y < rect.y + rect.h; y += blockSize) {
         for (let x = rect.x; x < rect.x + rect.w; x += blockSize) {
           const bw = Math.min(blockSize, rect.x + rect.w - x);
           const bh = Math.min(blockSize, rect.y + rect.h - y);
-          const p = tctx.getImageData(x, y, 1, 1).data;
-          tctx.fillStyle = `rgba(${p[0]}, ${p[1]}, ${p[2]}, ${p[3] / 255})`;
+          // 取块内平均色
+          const blockData = tctx.getImageData(x, y, bw, bh).data;
+          let r = 0, g = 0, b = 0, count = 0;
+          for (let i = 0; i < blockData.length; i += 4) {
+            r += blockData[i];
+            g += blockData[i + 1];
+            b += blockData[i + 2];
+            count++;
+          }
+          tctx.fillStyle = `rgb(${Math.round(r/count)}, ${Math.round(g/count)}, ${Math.round(b/count)})`;
           tctx.fillRect(x, y, bw, bh);
         }
       }
+      return tctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+
+    // 画箭头
+    function drawArrowOnImage(from, to) {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.putImageData(imageData, 0, 0);
+
+      const headLen = Math.max(15, ARROW_WIDTH * 5);
+      const angle = Math.atan2(to.y - from.y, to.x - from.x);
+      
+      tctx.save();
+      tctx.strokeStyle = ARROW_COLOR;
+      tctx.fillStyle = ARROW_COLOR;
+      tctx.lineWidth = ARROW_WIDTH;
+      tctx.lineCap = "round";
+      
+      // 线
+      tctx.beginPath();
+      tctx.moveTo(from.x, from.y);
+      tctx.lineTo(to.x, to.y);
+      tctx.stroke();
+      
+      // 箭头
+      tctx.beginPath();
+      tctx.moveTo(to.x, to.y);
+      tctx.lineTo(to.x - headLen * Math.cos(angle - Math.PI/6), to.y - headLen * Math.sin(angle - Math.PI/6));
+      tctx.lineTo(to.x - headLen * Math.cos(angle + Math.PI/6), to.y - headLen * Math.sin(angle + Math.PI/6));
+      tctx.closePath();
+      tctx.fill();
+      tctx.restore();
+      
+      return tctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+
+    // 画数字标注
+    function drawNumberOnImage(pos, num) {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.putImageData(imageData, 0, 0);
+
+      tctx.save();
+      const text = String(num);
+      tctx.font = `bold ${NUMBER_SIZE}px Arial, sans-serif`;
+      
+      // 圆形背景
+      const radius = NUMBER_SIZE * 0.7;
+      tctx.fillStyle = NUMBER_BG;
+      tctx.beginPath();
+      tctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+      tctx.fill();
+      
+      // 边框
+      tctx.strokeStyle = NUMBER_COLOR;
+      tctx.lineWidth = 2;
+      tctx.stroke();
+      
+      // 文字
+      tctx.fillStyle = NUMBER_COLOR;
+      tctx.textAlign = "center";
+      tctx.textBaseline = "middle";
+      tctx.fillText(text, pos.x, pos.y);
+      tctx.restore();
+      
       return tctx.getImageData(0, 0, canvas.width, canvas.height);
     }
 
@@ -552,6 +648,20 @@
         dragType = "mosaic";
         mosaicStart = getCanvasPoint(e);
         mosaicCurrent = mosaicStart;
+      } else if (arrowArmed) {
+        dragType = "arrow";
+        arrowStart = getCanvasPoint(e);
+        arrowCurrent = arrowStart;
+      } else if (numberArmed) {
+        dragType = "number";
+        const pos = getCanvasPoint(e);
+        pushUndoState();
+        imageData = drawNumberOnImage(pos, numberCounter);
+        numberCounter++;
+        selecting = false;
+        setStatus(`已添加数字 ${numberCounter - 1}`);
+        render();
+        return;
       } else {
         dragType = "range";
         dragStartY = getCanvasY(e);
@@ -572,6 +682,8 @@
       if (!selecting || !imageData) return;
       if (dragType === "mosaic") {
         mosaicCurrent = getCanvasPoint(e);
+      } else if (dragType === "arrow") {
+        arrowCurrent = getCanvasPoint(e);
       } else {
         dragCurrentY = getCanvasY(e);
       }
@@ -594,6 +706,19 @@
         } else {
           setStatus("马赛克区域无效，请重新拖拽。");
         }
+      } else if (dragType === "arrow") {
+        selecting = false;
+        if (arrowStart && arrowCurrent) {
+          const dist = Math.hypot(arrowCurrent.x - arrowStart.x, arrowCurrent.y - arrowStart.y);
+          if (dist > 5) {
+            pushUndoState();
+            imageData = drawArrowOnImage(arrowStart, arrowCurrent);
+            setStatus(`已添加箭头`);
+          }
+        }
+        arrowStart = null;
+        arrowCurrent = null;
+        arrowArmed = false;
       } else {
         const isPlainClick = dragMode === "replace"
           && dragStartY !== null
@@ -627,12 +752,46 @@
     btnMosaic.addEventListener("click", () => {
       if (!imageData) return;
       mosaicArmed = !mosaicArmed;
+      arrowArmed = false;
+      numberArmed = false;
       if (mosaicArmed) {
         selecting = false;
         dragType = "range";
         setStatus(`马赛克模式已开启：请在图片上拖拽矩形（块大小 ${MOSAIC_BLOCK}px）`);
       } else {
         setStatus("马赛克模式已关闭。");
+      }
+      render();
+      updateButtons();
+    });
+
+    btnArrow.addEventListener("click", () => {
+      if (!imageData) return;
+      arrowArmed = !arrowArmed;
+      mosaicArmed = false;
+      numberArmed = false;
+      if (arrowArmed) {
+        selecting = false;
+        dragType = "range";
+        setStatus("箭头模式已开启：请在图片上拖拽绘制箭头");
+      } else {
+        setStatus("箭头模式已关闭。");
+      }
+      render();
+      updateButtons();
+    });
+
+    btnNumber.addEventListener("click", () => {
+      if (!imageData) return;
+      numberArmed = !numberArmed;
+      mosaicArmed = false;
+      arrowArmed = false;
+      if (numberArmed) {
+        selecting = false;
+        dragType = "range";
+        setStatus(`数字标注模式已开启：点击图片放置数字 ${numberCounter}`);
+      } else {
+        setStatus("数字标注模式已关闭。");
       }
       render();
       updateButtons();
@@ -734,6 +893,19 @@
     window.addEventListener("keydown", (event) => {
       const key = event.key.toLowerCase();
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
+
+      // 快捷键 A 和 N 不需要 Ctrl
+      if (key === "a" && !ctrlOrMeta && imageData) {
+        event.preventDefault();
+        btnArrow.click();
+        return;
+      }
+      if (key === "n" && !ctrlOrMeta && imageData) {
+        event.preventDefault();
+        btnNumber.click();
+        return;
+      }
+
       if (!ctrlOrMeta) return;
 
       if (key === "z" && !event.shiftKey) {
