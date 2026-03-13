@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 
 <head>
@@ -689,6 +689,9 @@
       imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       originalData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       zoomScale = 1;
+      annotations = [];
+      selectedAnnotation = null;
+      numberCounter = 1;
       clearSelection();
       clearHistory();
       setStatus(`图片已载入: ${canvas.width} x ${canvas.height}`);
@@ -775,6 +778,7 @@
     }
 
     canvas.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return; // 只处理左键
       if (!imageData) return;
       const p = getCanvasPoint(e);
 
@@ -865,7 +869,8 @@
       updateButtons();
     });
 
-    window.addEventListener("mouseup", () => {
+    window.addEventListener("mouseup", (e) => {
+      if (e.button !== 0) return; // 只处理左键松开
       if (draggingAnnotation) {
         draggingAnnotation = null;
         setStatus("移动完成。");
