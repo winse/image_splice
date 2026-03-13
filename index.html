@@ -224,7 +224,7 @@
         </div>
         <h1 class="title">ImageSplice Pro</h1>
       </div>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片。拖拽选择区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去。<b>Delete</b> 键删除并接续。<br>“马赛克”拖拽打码；“画箭头”绘制箭头；“数字标注”点击放置；在箭头/数字模式下可直接<b>拖拽移动</b>已有元素。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“画箭头/数字”绘制标注；在标注模式下可直接<b>拖拽移动</b>元素，选中后按 <b>Delete</b> 删除。</p>
     </section>
 
     <section class="panel toolbar">
@@ -232,10 +232,8 @@
         <button id="btnUndo" disabled>撤销 (Ctrl+Z)</button>
         <button id="btnRedo" disabled>重做 (Ctrl+Y)</button>
       </div>
-      <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
         <button id="btnSelect" class="btn-tool" disabled>选择删除区间 (S)</button>
-        <button id="btnCut" class="danger" disabled>删除并接续</button>
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
@@ -279,7 +277,6 @@
     const btnArrow = document.getElementById("btnArrow");
     const btnNumber = document.getElementById("btnNumber");
     const btnZoomReset = document.getElementById("btnZoomReset");
-    const btnCut = document.getElementById("btnCut");
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
 
@@ -291,6 +288,7 @@
     let currentTool = "range"; // "range", "mosaic", "arrow", "number"
     let annotations = []; // 存储 { type, data }
     let draggingAnnotation = null;
+    let selectedAnnotation = null;
     let dragAnnotationOffset = { x: 0, y: 0 };
     let numberCounter = 1;
     const CUT_GAP_PX = 1;
@@ -414,7 +412,6 @@
       btnZoomReset.disabled = !hasImage;
       btnReset.disabled = !hasImage;
       btnSave.disabled = !hasImage;
-      btnCut.disabled = !hasImage || !hasSelection();
     }
 
     function applyCanvasZoom() {
@@ -433,6 +430,7 @@
       canvas.height = data.height;
       imageData = cloneImageData(data);
       annotations = JSON.parse(JSON.stringify(anns || []));
+      selectedAnnotation = null;
       numberCounter = counter || 1;
       clearSelection();
       render();
@@ -615,6 +613,24 @@
       ctx.putImageData(imageData, 0, 0); // 绘制背景
       // 绘制注解图层
       for (const ann of annotations) {
+        if (ann === selectedAnnotation) {
+          // 绘制选中高亮
+          ctx.save();
+          ctx.strokeStyle = "rgba(0, 120, 215, 0.6)";
+          ctx.lineWidth = 4;
+          if (ann.type === "number") {
+            ctx.beginPath();
+            ctx.arc(ann.pos.x, ann.pos.y, NUMBER_SIZE * 0.9, 0, Math.PI * 2);
+            ctx.stroke();
+          } else if (ann.type === "arrow") {
+            // 简单的线段加宽描边
+            ctx.beginPath();
+            ctx.moveTo(ann.from.x, ann.from.y);
+            ctx.lineTo(ann.to.x, ann.to.y);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
         if (ann.type === "arrow") drawArrow(ctx, ann.from, ann.to);
         else if (ann.type === "number") drawNumber(ctx, ann.pos, ann.val);
       }
@@ -740,20 +756,24 @@
       if (!imageData) return;
       const p = getCanvasPoint(e);
       
-      // 检查是否点击了已有注解以进行移动
+      // 检查是否点击了已有注解以进行移动或选中
       if (currentTool === "arrow" || currentTool === "number") {
         const hit = findAnnotationAt(p);
         if (hit) {
           pushUndoState();
           draggingAnnotation = hit;
+          selectedAnnotation = hit;
           if (hit.type === "number") {
             dragAnnotationOffset = { x: p.x - hit.pos.x, y: p.y - hit.pos.y };
           } else {
             // 记录箭头整体偏移
             dragAnnotationOffset = { x: p.x, y: p.y }; // 存原始点，更新时算差值
           }
-          setStatus(`正在移动${hit.type === "number" ? "数字" : "箭头"}...`);
+          setStatus(`已选中${hit.type === "number" ? "数字" : "箭头"}，拖拽可移动，按 Delete 可删除`);
+          render();
           return;
+        } else {
+          selectedAnnotation = null;
         }
       }
 
@@ -879,7 +899,7 @@
         dragStartY = null;
         dragCurrentY = null;
         if (hasSelection()) {
-          setStatus(`已更新区间：${cutRanges.length} 段，总删除高度 ${totalSelectedHeight(cutRanges)}px`);
+          setStatus(`已更新区间：${cutRanges.length} 段，总删除高度 ${totalSelectedHeight(cutRanges)}px。按 Delete 执行删除并接续`);
         } else {
           setStatus("当前没有选中区间。");
         }
@@ -921,7 +941,7 @@
       setStatus("缩放已还原到 1:1");
     });
 
-    btnCut.addEventListener("click", () => {
+    function doCut() {
       if (!imageData || !hasSelection()) return;
       const ranges = mergeRanges(cutRanges);
       const removed = totalSelectedHeight(ranges);
@@ -963,7 +983,7 @@
 
       // 裁剪时同步更新注解坐标
       transformAnnotations(ranges);
-      
+
       canvas.width = newCanvas.width;
       canvas.height = newCanvas.height;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -972,7 +992,7 @@
       clearSelection();
       setStatus(`已删除 ${removed}px（${ranges.length} 段），并插入 ${ranges.length} 条 ${CUT_GAP_PX}px 裁剪缝`);
       render();
-    });
+    }
 
     function transformAnnotations(ranges) {
       for (const ann of annotations) {
@@ -1072,9 +1092,17 @@
           return;
         }
         if (key === "delete") {
-          if (!btnCut.disabled) {
+          if (selectedAnnotation) {
+            pushUndoState();
+            annotations = annotations.filter(a => a !== selectedAnnotation);
+            selectedAnnotation = null;
+            setStatus("已删除选中的标注");
+            render();
+            return;
+          }
+          if (imageData && hasSelection()) {
             event.preventDefault();
-            btnCut.click();
+            doCut();
           }
           return;
         }
