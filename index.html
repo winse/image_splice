@@ -242,6 +242,9 @@
     let dragStartY = null;
     let dragCurrentY = null;
     let currentTool = "range"; // "range", "mosaic", "arrow", "number"
+    let annotations = []; // 存储 { type, data }
+    let draggingAnnotation = null;
+    let dragAnnotationOffset = { x: 0, y: 0 };
     let numberCounter = 1;
     const CUT_GAP_PX = 1;
     const CUT_GAP_COLOR = "#ffffff";
@@ -377,18 +380,24 @@
       return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
     }
 
-    function applyImageData(next) {
-      canvas.width = next.width;
-      canvas.height = next.height;
-      ctx.putImageData(next, 0, 0);
-      imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    function applyImageData(nextState) {
+      const { data, anns, counter } = nextState;
+      canvas.width = data.width;
+      canvas.height = data.height;
+      imageData = cloneImageData(data);
+      annotations = JSON.parse(JSON.stringify(anns || []));
+      numberCounter = counter || 1;
       clearSelection();
       render();
     }
 
     function pushUndoState() {
       if (!imageData) return;
-      undoStack.push(cloneImageData(imageData));
+      undoStack.push({
+        data: cloneImageData(imageData),
+        anns: JSON.parse(JSON.stringify(annotations)),
+        counter: numberCounter
+      });
       if (undoStack.length > MAX_HISTORY) undoStack.shift();
       redoStack.length = 0;
       updateButtons();
@@ -483,53 +492,68 @@
       }
     }
 
-    // 抽象出绘画逻辑，以便在预览和正式绘制时共用
+    // 绘制单个箭头
     function drawArrow(pCtx, from, to) {
       const dist = Math.hypot(to.x - from.x, to.y - from.y);
       if (dist < 5) return;
-
       const angle = Math.atan2(to.y - from.y, to.x - from.x);
-
-      // 这里的尺寸根据距离比例调整，获得更平滑的视觉效果
       const scale = Math.min(1.2, Math.max(0.6, dist / 150));
-      const shaftStartWidth = 1 * scale;
-      const shaftEndWidth = 6 * scale;
-      const headWidth = 18 * scale;
-      const headLength = 22 * scale;
-
+      const shaftStartWidth = 2 * scale;
+      const shaftEndWidth = 10 * scale;
+      const headWidth = 28 * scale;
+      const headLength = 32 * scale;
       pCtx.save();
       pCtx.fillStyle = ARROW_COLOR;
-
       const vX = Math.cos(angle + Math.PI / 2);
       const vY = Math.sin(angle + Math.PI / 2);
-
-      // 1. 渐变箭杆 (从尾部细到头部粗)
-      // 箭杆在头部稍微重叠，确保视觉连贯
       const shaftEndX = to.x - Math.cos(angle) * (headLength * 0.8);
       const shaftEndY = to.y - Math.sin(angle) * (headLength * 0.8);
-
       pCtx.beginPath();
-      // 尾部点
       pCtx.moveTo(from.x - vX * shaftStartWidth / 2, from.y - vY * shaftStartWidth / 2);
       pCtx.lineTo(from.x + vX * shaftStartWidth / 2, from.y + vY * shaftStartWidth / 2);
-      // 头部连接点
       pCtx.lineTo(shaftEndX + vX * shaftEndWidth / 2, shaftEndY + vY * shaftEndWidth / 2);
       pCtx.lineTo(shaftEndX - vX * shaftEndWidth / 2, shaftEndY - vY * shaftEndWidth / 2);
       pCtx.closePath();
       pCtx.fill();
-
-      // 2. 箭头帽
       const headBaseX = to.x - Math.cos(angle) * headLength;
       const headBaseY = to.y - Math.sin(angle) * headLength;
-
       pCtx.beginPath();
       pCtx.moveTo(to.x, to.y);
       pCtx.lineTo(headBaseX + vX * headWidth / 2, headBaseY + vY * headWidth / 2);
       pCtx.lineTo(headBaseX - vX * headWidth / 2, headBaseY - vY * headWidth / 2);
       pCtx.closePath();
       pCtx.fill();
-
       pCtx.restore();
+    }
+
+    // 绘制单个数字
+    function drawNumber(pCtx, pos, num) {
+      pCtx.save();
+      const text = String(num);
+      pCtx.font = `bold ${NUMBER_SIZE}px Arial, sans-serif`;
+      const radius = NUMBER_SIZE * 0.7;
+      pCtx.fillStyle = NUMBER_BG;
+      pCtx.beginPath();
+      pCtx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+      pCtx.fill();
+      pCtx.strokeStyle = NUMBER_COLOR;
+      pCtx.lineWidth = 2;
+      pCtx.stroke();
+      pCtx.fillStyle = NUMBER_COLOR;
+      pCtx.textAlign = "center";
+      pCtx.textBaseline = "middle";
+      pCtx.fillText(text, pos.x, pos.y);
+      pCtx.restore();
+    }
+
+    // 将箭头添加到注解层
+    function drawArrowOnImage(from, to) {
+      annotations.push({ type: "arrow", from: { ...from }, to: { ...to } });
+    }
+
+    // 将数字添加到注解层
+    function drawNumberOnImage(pos, num) {
+      annotations.push({ type: "number", pos: { ...pos }, val: num });
     }
 
     function render() {
@@ -541,10 +565,35 @@
       canvas.hidden = false;
       empty.hidden = true;
       applyCanvasZoom();
-      ctx.putImageData(imageData, 0, 0);
-      drawSelectionOverlay();
+      ctx.putImageData(imageData, 0, 0); // 绘制背景
+      // 绘制注解图层
+      for (const ann of annotations) {
+        if (ann.type === "arrow") drawArrow(ctx, ann.from, ann.to);
+        else if (ann.type === "number") drawNumber(ctx, ann.pos, ann.val);
+      }
+      drawSelectionOverlay(); // 绘制预览
       updateButtons();
       updateMetrics();
+    }
+
+    function findAnnotationAt(p) {
+      for (let i = annotations.length - 1; i >= 0; i--) {
+        const ann = annotations[i];
+        if (ann.type === "number") {
+          if (Math.hypot(p.x - ann.pos.x, p.y - ann.pos.y) < 20) return ann;
+        } else if (ann.type === "arrow") {
+          if (isPointNearSegment(p, ann.from, ann.to, 10)) return ann;
+        }
+      }
+      return null;
+    }
+
+    function isPointNearSegment(p, a, b, threshold) {
+      const l2 = Math.hypot(a.x - b.x, a.y - b.y) ** 2;
+      if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y) < threshold;
+      let t = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / l2;
+      t = Math.max(0, Math.min(1, t));
+      return Math.hypot(p.x - (a.x + t * (b.x - a.x)), p.y - (a.y + t * (b.y - a.y))) < threshold;
     }
 
     function loadImageToCanvas(img) {
@@ -564,7 +613,6 @@
     async function handlePaste(event) {
       const items = event.clipboardData && event.clipboardData.items;
       if (!items) return;
-
       for (const item of items) {
         if (item.type && item.type.startsWith("image/")) {
           const file = item.getAsFile();
@@ -584,7 +632,6 @@
           return;
         }
       }
-
       setStatus("剪贴板里没有图片数据。");
     }
 
@@ -610,73 +657,20 @@
       tempCanvas.height = canvas.height;
       const tctx = tempCanvas.getContext("2d");
       tctx.putImageData(imageData, 0, 0);
-
-      // 组合式马赛克：先模糊再块化
-      // 简化版：使用块平均色
       for (let y = rect.y; y < rect.y + rect.h; y += blockSize) {
         for (let x = rect.x; x < rect.x + rect.w; x += blockSize) {
           const bw = Math.min(blockSize, rect.x + rect.w - x);
           const bh = Math.min(blockSize, rect.y + rect.h - y);
-          // 取块内平均色
           const blockData = tctx.getImageData(x, y, bw, bh).data;
           let r = 0, g = 0, b = 0, count = 0;
           for (let i = 0; i < blockData.length; i += 4) {
-            r += blockData[i];
-            g += blockData[i + 1];
-            b += blockData[i + 2];
+            r += blockData[i]; g += blockData[i + 1]; b += blockData[i + 2];
             count++;
           }
-          tctx.fillStyle = `rgb(${Math.round(r / count)}, ${Math.round(g / count)}, ${Math.round(b / count)})`;
+          tctx.fillStyle = `rgb(${Math.round(r/count)}, ${Math.round(g/count)}, ${Math.round(b/count)})`;
           tctx.fillRect(x, y, bw, bh);
         }
       }
-      return tctx.getImageData(0, 0, canvas.width, canvas.height);
-    }
-
-    // 画箭头
-    function drawArrowOnImage(from, to) {
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tctx = tempCanvas.getContext("2d");
-      tctx.putImageData(imageData, 0, 0);
-
-      drawArrow(tctx, from, to);
-
-      return tctx.getImageData(0, 0, canvas.width, canvas.height);
-    }
-
-    // 画数字标注
-    function drawNumberOnImage(pos, num) {
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tctx = tempCanvas.getContext("2d");
-      tctx.putImageData(imageData, 0, 0);
-
-      tctx.save();
-      const text = String(num);
-      tctx.font = `bold ${NUMBER_SIZE}px Arial, sans-serif`;
-
-      // 圆形背景
-      const radius = NUMBER_SIZE * 0.7;
-      tctx.fillStyle = NUMBER_BG;
-      tctx.beginPath();
-      tctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
-      tctx.fill();
-
-      // 边框
-      tctx.strokeStyle = NUMBER_COLOR;
-      tctx.lineWidth = 2;
-      tctx.stroke();
-
-      // 文字
-      tctx.fillStyle = NUMBER_COLOR;
-      tctx.textAlign = "center";
-      tctx.textBaseline = "middle";
-      tctx.fillText(text, pos.x, pos.y);
-      tctx.restore();
-
       return tctx.getImageData(0, 0, canvas.width, canvas.height);
     }
 
@@ -697,19 +691,37 @@
 
     canvas.addEventListener("mousedown", (e) => {
       if (!imageData) return;
+      const p = getCanvasPoint(e);
+      
+      // 检查是否点击了已有注解以进行移动
+      if (currentTool === "arrow" || currentTool === "number") {
+        const hit = findAnnotationAt(p);
+        if (hit) {
+          pushUndoState();
+          draggingAnnotation = hit;
+          if (hit.type === "number") {
+            dragAnnotationOffset = { x: p.x - hit.pos.x, y: p.y - hit.pos.y };
+          } else {
+            // 记录箭头整体偏移
+            dragAnnotationOffset = { x: p.x, y: p.y }; // 存原始点，更新时算差值
+          }
+          setStatus(`正在移动${hit.type === "number" ? "数字" : "箭头"}...`);
+          return;
+        }
+      }
+
       selecting = true;
       dragType = currentTool;
 
       if (currentTool === "mosaic") {
-        mosaicStart = getCanvasPoint(e);
-        mosaicCurrent = mosaicStart;
+        mosaicStart = p;
+        mosaicCurrent = p;
       } else if (currentTool === "arrow") {
-        arrowStart = getCanvasPoint(e);
-        arrowCurrent = arrowStart;
+        arrowStart = p;
+        arrowCurrent = p;
       } else if (currentTool === "number") {
-        const pos = getCanvasPoint(e);
         pushUndoState();
-        imageData = drawNumberOnImage(pos, numberCounter);
+        drawNumberOnImage(p, numberCounter);
         numberCounter++;
         selecting = false;
         setStatus(`已添加数字 ${numberCounter - 1}`);
@@ -717,8 +729,8 @@
         return;
       } else {
         dragType = "range";
-        dragStartY = getCanvasY(e);
-        dragCurrentY = dragStartY;
+        dragStartY = p.y;
+        dragCurrentY = p.y;
         if (e.shiftKey) {
           dragMode = "subtract";
         } else if (e.ctrlKey || e.metaKey) {
@@ -732,19 +744,46 @@
     });
 
     window.addEventListener("mousemove", (e) => {
-      if (!selecting || !imageData) return;
+      if (!imageData) return;
+      const p = getCanvasPoint(e);
+
+      if (draggingAnnotation) {
+        if (draggingAnnotation.type === "number") {
+          draggingAnnotation.pos.x = p.x - dragAnnotationOffset.x;
+          draggingAnnotation.pos.y = p.y - dragAnnotationOffset.y;
+        } else if (draggingAnnotation.type === "arrow") {
+          const dx = p.x - dragAnnotationOffset.x;
+          const dy = p.y - dragAnnotationOffset.y;
+          draggingAnnotation.from.x += dx;
+          draggingAnnotation.from.y += dy;
+          draggingAnnotation.to.x += dx;
+          draggingAnnotation.to.y += dy;
+          dragAnnotationOffset = { x: p.x, y: p.y };
+        }
+        render();
+        return;
+      }
+
+      if (!selecting) return;
       if (dragType === "mosaic") {
-        mosaicCurrent = getCanvasPoint(e);
+        mosaicCurrent = p;
       } else if (dragType === "arrow") {
-        arrowCurrent = getCanvasPoint(e);
+        arrowCurrent = p;
       } else {
-        dragCurrentY = getCanvasY(e);
+        dragCurrentY = p.y;
       }
       render();
       updateButtons();
     });
 
     window.addEventListener("mouseup", () => {
+      if (draggingAnnotation) {
+        draggingAnnotation = null;
+        setStatus("移动完成。");
+        render();
+        return;
+      }
+
       if (!selecting) return;
       if (dragType === "mosaic") {
         const rect = normalizeRect(mosaicStart, mosaicCurrent);
@@ -753,6 +792,8 @@
         mosaicCurrent = null;
         if (rect) {
           pushUndoState();
+          // 需要在 baking 马赛克之前先把层级元素固定吗？
+          // 不，马赛克是改底图，注解依然在上面
           imageData = mosaicRectOnCurrentImage(rect, MOSAIC_BLOCK);
           setStatus(`已完成马赛克: x=${rect.x}, y=${rect.y}, ${rect.w}x${rect.h}px`);
         } else {
@@ -764,7 +805,7 @@
           const dist = Math.hypot(arrowCurrent.x - arrowStart.x, arrowCurrent.y - arrowStart.y);
           if (dist > 5) {
             pushUndoState();
-            imageData = drawArrowOnImage(arrowStart, arrowCurrent);
+            drawArrowOnImage(arrowStart, arrowCurrent);
             setStatus(`已添加箭头`);
           }
         }
@@ -873,6 +914,9 @@
         nctx.drawImage(oldCanvas, 0, srcY, canvas.width, tailH, 0, dstY, canvas.width, tailH);
       }
 
+      // 裁剪时同步更新注解坐标
+      transformAnnotations(ranges);
+      
       canvas.width = newCanvas.width;
       canvas.height = newCanvas.height;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -883,16 +927,52 @@
       render();
     });
 
+    function transformAnnotations(ranges) {
+      for (const ann of annotations) {
+        if (ann.type === "number") {
+          ann.pos.y = calculateNewY(ann.pos.y, ranges);
+        } else if (ann.type === "arrow") {
+          ann.from.y = calculateNewY(ann.from.y, ranges);
+          ann.to.y = calculateNewY(ann.to.y, ranges);
+        }
+      }
+      // 过滤掉已经在裁剪区域内的注解（可选，目前保留）
+    }
+
+    function calculateNewY(oldY, ranges) {
+      let newY = oldY;
+      let offset = 0;
+      for (const r of ranges) {
+        if (oldY > r.y2) {
+          // 在裁剪区下方，整体向上移
+          offset += (r.y2 - r.y1) - CUT_GAP_PX;
+        } else if (oldY >= r.y1 && oldY <= r.y2) {
+          // 在裁剪区内部，移动到裁剪缝位置
+          // 这里可以更精细，暂定移到当前段的起始位置
+          offset += (oldY - r.y1);
+        }
+      }
+      return oldY - offset;
+    }
+
     btnReset.addEventListener("click", () => {
       if (!originalData) return;
       pushUndoState();
-      applyImageData(cloneImageData(originalData));
+      applyImageData({
+        data: originalData,
+        anns: [],
+        counter: 1
+      });
       setStatus(`已恢复初始图片: ${canvas.width} x ${canvas.height}`);
     });
 
     btnUndo.addEventListener("click", () => {
       if (!imageData || undoStack.length === 0) return;
-      redoStack.push(cloneImageData(imageData));
+      redoStack.push({
+        data: cloneImageData(imageData),
+        anns: JSON.parse(JSON.stringify(annotations)),
+        counter: numberCounter
+      });
       const prev = undoStack.pop();
       applyImageData(prev);
       setStatus(`已撤销，剩余可撤销 ${undoStack.length} 步`);
@@ -901,7 +981,11 @@
 
     btnRedo.addEventListener("click", () => {
       if (!imageData || redoStack.length === 0) return;
-      undoStack.push(cloneImageData(imageData));
+      undoStack.push({
+        data: cloneImageData(imageData),
+        anns: JSON.parse(JSON.stringify(annotations)),
+        counter: numberCounter
+      });
       const next = redoStack.pop();
       applyImageData(next);
       setStatus(`已重做，剩余可重做 ${redoStack.length} 步`);
