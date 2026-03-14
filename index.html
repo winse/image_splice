@@ -272,6 +272,8 @@
       <div class="tool-group">
         <button id="btnSave" class="primary" disabled>下载结果 PNG</button>
       </div>
+      <div class="tool-divider" aria-hidden="true" style="margin-left: 4px; margin-right: 8px;"></div>
+      <button id="btnQuickDelete" class="danger" style="display: none; padding: 4px 10px; margin-right: 8px; font-weight: bold;">执行删除 (Delete)</button>
       <span id="status" class="status">等待粘贴图片...</span>
     </section>
 
@@ -301,6 +303,7 @@
     const btnZoomReset = document.getElementById("btnZoomReset");
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
+    const btnQuickDelete = document.getElementById("btnQuickDelete");
 
     let imageData = null;
     let originalData = null;
@@ -434,6 +437,12 @@
       btnZoomReset.disabled = !hasImage;
       btnReset.disabled = !hasImage;
       btnSave.disabled = !hasImage;
+
+      if (hasImage && (selectedAnnotation || hasSelection())) {
+        btnQuickDelete.style.display = "inline-block";
+      } else {
+        btnQuickDelete.style.display = "none";
+      }
     }
 
     function applyCanvasZoom() {
@@ -795,7 +804,7 @@
             // 记录箭头整体偏移
             dragAnnotationOffset = { x: p.x, y: p.y }; // 存原始点，更新时算差值
           }
-          setStatus(`已选中${hit.type === "number" ? "数字" : "箭头"}，拖拽可移动，按 Delete 可删除`);
+          setStatus(`已选中${hit.type === "number" ? "数字" : "箭头"}，拖拽可移动，按 Delete 键或点击按钮移除`);
           render();
           return;
         } else {
@@ -926,7 +935,7 @@
         dragStartY = null;
         dragCurrentY = null;
         if (hasSelection()) {
-          setStatus(`已更新区间：${cutRanges.length} 段，总删除高度 ${totalSelectedHeight(cutRanges)}px。按 Delete 执行删除并接续`);
+          setStatus(`已更新区间：${cutRanges.length} 段，总删除高度 ${totalSelectedHeight(cutRanges)}px。按 Delete 或点击按钮执行删除并接续`);
         } else {
           setStatus("当前没有选中区间。");
         }
@@ -1088,6 +1097,20 @@
       link.href = canvas.toDataURL("image/png");
       link.click();
       setStatus("已触发下载。");
+    });
+
+    btnQuickDelete.addEventListener("click", () => {
+      if (selectedAnnotation) {
+        pushUndoState();
+        annotations = annotations.filter(a => a !== selectedAnnotation);
+        selectedAnnotation = null;
+        setStatus("已删除选中的标注");
+        render();
+        return;
+      }
+      if (imageData && hasSelection()) {
+        doCut();
+      }
     });
 
     window.addEventListener("paste", handlePaste);
