@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 
 <head>
@@ -102,6 +102,39 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
+    }
+
+    .tool-config {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #536679;
+      font-size: 13px;
+    }
+
+    .tool-config label {
+      white-space: nowrap;
+    }
+
+    .tool-config input[type="color"] {
+      width: 36px;
+      height: 32px;
+      padding: 2px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .tool-config input[type="range"] {
+      width: 96px;
+      accent-color: var(--accent);
+    }
+
+    .tool-config output {
+      min-width: 32px;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
     }
 
     .tool-divider {
@@ -254,6 +287,7 @@
         <button id="btnUndo" disabled>撤销 (Ctrl+Z)</button>
         <button id="btnRedo" disabled>重做 (Ctrl+Y)</button>
       </div>
+      <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
         <button id="btnSelect" class="btn-tool" disabled>选择删除区间 (S)</button>
       </div>
@@ -261,8 +295,10 @@
       <div class="tool-group">
         <button id="btnMosaic" class="btn-tool" disabled>矩形马赛克 (M)</button>
         <button id="btnArrow" class="btn-tool" disabled>画箭头 (A)</button>
+        <button id="btnLine" class="btn-tool" disabled>划线 (L)</button>
         <button id="btnNumber" class="btn-tool" disabled>数字标注 (N)</button>
       </div>
+
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
         <button id="btnZoomReset" title="缩放还原 1:1" disabled>比例还原</button>
@@ -270,11 +306,25 @@
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
-        <button id="btnSave" class="primary" disabled>下载结果 PNG</button>
+        <button id="btnSave" class="primary" disabled>下载</button>
       </div>
-      <div class="tool-divider" aria-hidden="true" style="margin-left: 4px; margin-right: 8px;"></div>
-      <button id="btnQuickDelete" class="danger" style="display: none; padding: 4px 10px; margin-right: 8px; font-weight: bold;">执行删除 (Delete)</button>
-      <span id="status" class="status">等待粘贴图片...</span>
+      <div class="tool-divider" aria-hidden="true"></div>
+      <div class="tool-group" style="gap: 16px;">
+        <div id="strokeConfig" class="tool-group" style="display: none;">
+          <div class="tool-config">
+            <label for="strokeColor">颜色</label>
+            <input id="strokeColor" type="color" value="#ff4d4f" />
+          </div>
+          <div class="tool-config">
+            <label for="strokeWidth">粗细</label>
+            <input id="strokeWidth" type="range" min="1" max="24" step="1" value="4" />
+            <output id="strokeWidthValue" for="strokeWidth">4px</output>
+          </div>
+          <div class="tool-divider" aria-hidden="true"></div>
+        </div>
+        <button id="btnQuickDelete" class="danger" style="display: none; padding: 4px 10px; font-weight: bold;">执行删除 (Delete)</button>
+        <span id="status" class="status">等待粘贴图片...</span>
+      </div>
     </section>
 
     <section class="panel">
@@ -299,29 +349,42 @@
     const btnSelect = document.getElementById("btnSelect");
     const btnMosaic = document.getElementById("btnMosaic");
     const btnArrow = document.getElementById("btnArrow");
+    const btnLine = document.getElementById("btnLine");
     const btnNumber = document.getElementById("btnNumber");
     const btnZoomReset = document.getElementById("btnZoomReset");
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
     const btnQuickDelete = document.getElementById("btnQuickDelete");
+    const strokeColorInput = document.getElementById("strokeColor");
+    const strokeWidthInput = document.getElementById("strokeWidth");
+    const strokeWidthValue = document.getElementById("strokeWidthValue");
 
     let imageData = null;
     let originalData = null;
     let selecting = false;
     let dragStartY = null;
     let dragCurrentY = null;
-    let currentTool = "range"; // "range", "mosaic", "arrow", "number"
+    let currentTool = "range"; // "range", "mosaic", "arrow", "line", "number"
     let annotations = []; // 存储 { type, data }
     let draggingAnnotation = null;
     let selectedAnnotation = null;
     let dragAnnotationOffset = { x: 0, y: 0 };
     let numberCounter = 1;
+    let cutRanges = [];
+    let dragType = "range";
+    let dragMode = "replace";
+    let mosaicStart = null;
+    let mosaicCurrent = null;
+    let arrowStart = null;
+    let arrowCurrent = null;
+    let lineStart = null;
+    let lineCurrent = null;
     const CUT_GAP_PX = 1;
     const CUT_GAP_COLOR = "#ffffff";
     const MOSAIC_BLOCK = 12;
     const MOSAIC_BLUR_RADIUS = 8;
-    const ARROW_COLOR = "#ff4d4f"; // 更加亮丽的现代红色
-    const ARROW_WIDTH = 3; // 基础宽度比例
+    const DEFAULT_STROKE_COLOR = "#ff4d4f";
+    const DEFAULT_STROKE_WIDTH = 4;
     const NUMBER_COLOR = "#ff3333";
     const NUMBER_BG = "#ffffff";
     const NUMBER_SIZE = 24;
@@ -336,6 +399,25 @@
 
     function setStatus(text) {
       statusEl.textContent = text;
+    }
+
+    function getStrokeColor() {
+      return strokeColorInput?.value || DEFAULT_STROKE_COLOR;
+    }
+
+    function getStrokeWidth() {
+      return Math.max(1, Number(strokeWidthInput?.value) || DEFAULT_STROKE_WIDTH);
+    }
+
+    function syncStrokeControls() {
+      strokeWidthValue.textContent = `${getStrokeWidth()}px`;
+    }
+
+    function getAnnotationStroke(ann) {
+      return {
+        color: ann.color || DEFAULT_STROKE_COLOR,
+        width: Math.max(1, Number(ann.width) || DEFAULT_STROKE_WIDTH)
+      };
     }
 
     function hasSelection() {
@@ -416,6 +498,10 @@
       cutRanges = [];
       mosaicStart = null;
       mosaicCurrent = null;
+      arrowStart = null;
+      arrowCurrent = null;
+      lineStart = null;
+      lineCurrent = null;
     }
 
     function updateButtons() {
@@ -426,12 +512,16 @@
       btnSelect.disabled = !hasImage;
       btnMosaic.disabled = !hasImage;
       btnArrow.disabled = !hasImage;
+      btnLine.disabled = !hasImage;
       btnNumber.disabled = !hasImage;
+      strokeColorInput.disabled = !hasImage;
+      strokeWidthInput.disabled = !hasImage;
 
       // 更新激活工具的样式
       btnSelect.classList.toggle("active", hasImage && currentTool === "range");
       btnMosaic.classList.toggle("active", hasImage && currentTool === "mosaic");
       btnArrow.classList.toggle("active", hasImage && currentTool === "arrow");
+      btnLine.classList.toggle("active", hasImage && currentTool === "line");
       btnNumber.classList.toggle("active", hasImage && currentTool === "number");
 
       btnZoomReset.disabled = !hasImage;
@@ -443,6 +533,13 @@
       } else {
         btnQuickDelete.style.display = "none";
       }
+
+      const showStroke = hasImage && (
+        currentTool === "line" ||
+        currentTool === "arrow" ||
+        (selectedAnnotation && (selectedAnnotation.type === "line" || selectedAnnotation.type === "arrow"))
+      );
+      document.getElementById("strokeConfig").style.display = showStroke ? "inline-flex" : "none";
     }
 
     function applyCanvasZoom() {
@@ -500,6 +597,9 @@
         parts.push(`<span>将删除总高度: ${totalSelectedHeight(ranges)}px</span>`);
       }
       parts.push(`<span>缩放: ${(zoomScale * 100).toFixed(0)}%</span>`);
+      if (currentTool === "arrow" || currentTool === "line") {
+        parts.push(`<span>线条: ${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}</span>`);
+      }
       if (selecting) {
         if (dragType === "range") {
           parts.push(`<span>当前模式: ${modeText(dragMode)}</span>`);
@@ -508,20 +608,25 @@
           if (rect) {
             parts.push(`<span>马赛克区域: ${rect.w} x ${rect.h}px</span>`);
           }
+        } else if (dragType === "arrow" && arrowStart && arrowCurrent) {
+          parts.push(`<span>箭头长度: ${Math.round(Math.hypot(arrowCurrent.x - arrowStart.x, arrowCurrent.y - arrowStart.y))}px</span>`);
+        } else if (dragType === "line" && lineStart && lineCurrent) {
+          parts.push(`<span>线段长度: ${Math.round(Math.hypot(lineCurrent.x - lineStart.x, lineCurrent.y - lineStart.y))}px</span>`);
         }
       }
       parts.push(`<span>当前工具: ${getToolName(currentTool)}</span>`);
       metricsEl.innerHTML = parts.join("");
     }
 
+
     function getToolName(tool) {
       if (tool === "range") return "删除区间选择";
-      if (tool === "mosaic") return "马赛克";
+      if (tool === "mosaic") return "矩形马赛克";
       if (tool === "arrow") return "画箭头";
+      if (tool === "line") return "划线";
       if (tool === "number") return "数字标注";
       return "未知";
     }
-
     function normalizeRect(a, b) {
       if (!a || !b) return null;
       const x1 = Math.max(0, Math.min(a.x, b.x));
@@ -533,6 +638,7 @@
       if (w <= 0 || h <= 0) return null;
       return { x: Math.round(x1), y: Math.round(y1), w, h };
     }
+
 
     function drawSelectionOverlay() {
       const ranges = getPreviewRanges();
@@ -564,22 +670,46 @@
       }
 
       if (selecting && dragType === "arrow" && arrowStart && arrowCurrent) {
-        drawArrow(ctx, arrowStart, arrowCurrent);
+        drawArrow(ctx, arrowStart, arrowCurrent, {
+          color: getStrokeColor(),
+          width: getStrokeWidth()
+        });
+      }
+
+      if (selecting && dragType === "line" && lineStart && lineCurrent) {
+        drawLine(ctx, lineStart, lineCurrent, {
+          color: getStrokeColor(),
+          width: getStrokeWidth()
+        });
       }
     }
 
-    // 绘制单个箭头
-    function drawArrow(pCtx, from, to) {
+    function drawLine(pCtx, from, to, style = {}) {
+      const { color, width } = getAnnotationStroke(style);
+      pCtx.save();
+      pCtx.strokeStyle = color;
+      pCtx.lineWidth = width;
+      pCtx.lineCap = "round";
+      pCtx.lineJoin = "round";
+      pCtx.beginPath();
+      pCtx.moveTo(from.x, from.y);
+      pCtx.lineTo(to.x, to.y);
+      pCtx.stroke();
+      pCtx.restore();
+    }
+
+    function drawArrow(pCtx, from, to, style = {}) {
       const dist = Math.hypot(to.x - from.x, to.y - from.y);
       if (dist < 5) return;
+      const { color, width } = getAnnotationStroke(style);
       const angle = Math.atan2(to.y - from.y, to.x - from.x);
-      const scale = Math.min(1.2, Math.max(0.6, dist / 150));
-      const shaftStartWidth = 2 * scale;
-      const shaftEndWidth = 10 * scale;
-      const headWidth = 28 * scale;
-      const headLength = 32 * scale;
+      const scale = Math.min(1.25, Math.max(0.7, dist / 150));
+      const shaftStartWidth = Math.max(2, width * 0.65) * scale;
+      const shaftEndWidth = Math.max(shaftStartWidth + 2, width * 1.9) * scale;
+      const headWidth = Math.max(shaftEndWidth * 2.1, width * 5) * scale;
+      const headLength = Math.max(18, width * 6) * scale;
       pCtx.save();
-      pCtx.fillStyle = ARROW_COLOR;
+      pCtx.fillStyle = color;
       const vX = Math.cos(angle + Math.PI / 2);
       const vY = Math.sin(angle + Math.PI / 2);
       const shaftEndX = to.x - Math.cos(angle) * (headLength * 0.8);
@@ -601,8 +731,6 @@
       pCtx.fill();
       pCtx.restore();
     }
-
-    // 绘制单个数字
     function drawNumber(pCtx, pos, num) {
       pCtx.save();
       const text = String(num);
@@ -623,11 +751,27 @@
     }
 
     // 将箭头添加到注解层
+
     function drawArrowOnImage(from, to) {
-      annotations.push({ type: "arrow", from: { ...from }, to: { ...to } });
+      annotations.push({
+        type: "arrow",
+        from: { ...from },
+        to: { ...to },
+        color: getStrokeColor(),
+        width: getStrokeWidth()
+      });
     }
 
-    // 将数字添加到注解层
+    function drawLineOnImage(from, to) {
+      annotations.push({
+        type: "line",
+        from: { ...from },
+        to: { ...to },
+        color: getStrokeColor(),
+        width: getStrokeWidth()
+      });
+    }
+
     function drawNumberOnImage(pos, num) {
       annotations.push({ type: "number", pos: { ...pos }, val: num });
     }
@@ -641,20 +785,19 @@
       canvas.hidden = false;
       empty.hidden = true;
       applyCanvasZoom();
-      ctx.putImageData(imageData, 0, 0); // 绘制背景
-      // 绘制注解图层
+      ctx.putImageData(imageData, 0, 0);
       for (const ann of annotations) {
         if (ann === selectedAnnotation) {
-          // 绘制选中高亮
           ctx.save();
           ctx.strokeStyle = "rgba(0, 120, 215, 0.6)";
-          ctx.lineWidth = 4;
           if (ann.type === "number") {
+            ctx.lineWidth = 4;
             ctx.beginPath();
             ctx.arc(ann.pos.x, ann.pos.y, NUMBER_SIZE * 0.9, 0, Math.PI * 2);
             ctx.stroke();
-          } else if (ann.type === "arrow") {
-            // 简单的线段加宽描边
+          } else if (ann.type === "arrow" || ann.type === "line") {
+            ctx.lineWidth = getAnnotationStroke(ann).width + 4;
+            ctx.lineCap = "round";
             ctx.beginPath();
             ctx.moveTo(ann.from.x, ann.from.y);
             ctx.lineTo(ann.to.x, ann.to.y);
@@ -662,10 +805,16 @@
           }
           ctx.restore();
         }
-        if (ann.type === "arrow") drawArrow(ctx, ann.from, ann.to);
-        else if (ann.type === "number") drawNumber(ctx, ann.pos, ann.val);
+
+        if (ann.type === "arrow") {
+          drawArrow(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "line") {
+          drawLine(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "number") {
+          drawNumber(ctx, ann.pos, ann.val);
+        }
       }
-      drawSelectionOverlay(); // 绘制预览
+      drawSelectionOverlay();
       updateButtons();
       updateMetrics();
     }
@@ -675,13 +824,13 @@
         const ann = annotations[i];
         if (ann.type === "number") {
           if (Math.hypot(p.x - ann.pos.x, p.y - ann.pos.y) < 20) return ann;
-        } else if (ann.type === "arrow") {
-          if (isPointNearSegment(p, ann.from, ann.to, 10)) return ann;
+        } else if (ann.type === "arrow" || ann.type === "line") {
+          const threshold = Math.max(10, getAnnotationStroke(ann).width + 6);
+          if (isPointNearSegment(p, ann.from, ann.to, threshold)) return ann;
         }
       }
       return null;
     }
-
     function isPointNearSegment(p, a, b, threshold) {
       const l2 = Math.hypot(a.x - b.x, a.y - b.y) ** 2;
       if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y) < threshold;
@@ -786,13 +935,13 @@
       setStatus(`当前缩放 ${(zoomScale * 100).toFixed(0)}%`);
     }
 
+
     canvas.addEventListener("mousedown", (e) => {
-      if (e.button !== 0) return; // 只处理左键
+      if (e.button !== 0) return;
       if (!imageData) return;
       const p = getCanvasPoint(e);
 
-      // 检查是否点击了已有注解以进行移动或选中
-      if (currentTool === "arrow" || currentTool === "number") {
+      if (currentTool === "arrow" || currentTool === "line" || currentTool === "number") {
         const hit = findAnnotationAt(p);
         if (hit) {
           pushUndoState();
@@ -801,15 +950,14 @@
           if (hit.type === "number") {
             dragAnnotationOffset = { x: p.x - hit.pos.x, y: p.y - hit.pos.y };
           } else {
-            // 记录箭头整体偏移
-            dragAnnotationOffset = { x: p.x, y: p.y }; // 存原始点，更新时算差值
+            dragAnnotationOffset = { x: p.x, y: p.y };
           }
-          setStatus(`已选中${hit.type === "number" ? "数字" : "箭头"}，拖拽可移动，按 Delete 键或点击按钮移除`);
+          const label = hit.type === "number" ? "数字" : hit.type === "line" ? "线条" : "箭头";
+          setStatus(`已选中${label}，拖拽可移动，按 Delete 键或点击按钮移除`);
           render();
           return;
-        } else {
-          selectedAnnotation = null;
         }
+        selectedAnnotation = null;
       }
 
       selecting = true;
@@ -821,6 +969,9 @@
       } else if (currentTool === "arrow") {
         arrowStart = p;
         arrowCurrent = p;
+      } else if (currentTool === "line") {
+        lineStart = p;
+        lineCurrent = p;
       } else if (currentTool === "number") {
         pushUndoState();
         drawNumberOnImage(p, numberCounter);
@@ -853,7 +1004,7 @@
         if (draggingAnnotation.type === "number") {
           draggingAnnotation.pos.x = p.x - dragAnnotationOffset.x;
           draggingAnnotation.pos.y = p.y - dragAnnotationOffset.y;
-        } else if (draggingAnnotation.type === "arrow") {
+        } else if (draggingAnnotation.type === "arrow" || draggingAnnotation.type === "line") {
           const dx = p.x - dragAnnotationOffset.x;
           const dy = p.y - dragAnnotationOffset.y;
           draggingAnnotation.from.x += dx;
@@ -871,6 +1022,8 @@
         mosaicCurrent = p;
       } else if (dragType === "arrow") {
         arrowCurrent = p;
+      } else if (dragType === "line") {
+        lineCurrent = p;
       } else {
         dragCurrentY = p.y;
       }
@@ -879,7 +1032,7 @@
     });
 
     window.addEventListener("mouseup", (e) => {
-      if (e.button !== 0) return; // 只处理左键松开
+      if (e.button !== 0) return;
       if (draggingAnnotation) {
         draggingAnnotation = null;
         setStatus("移动完成。");
@@ -895,8 +1048,6 @@
         mosaicCurrent = null;
         if (rect) {
           pushUndoState();
-          // 需要在 baking 马赛克之前先把层级元素固定吗？
-          // 不，马赛克是改底图，注解依然在上面
           imageData = mosaicRectOnCurrentImage(rect, MOSAIC_BLOCK);
           setStatus(`已完成马赛克: x=${rect.x}, y=${rect.y}, ${rect.w}x${rect.h}px`);
         } else {
@@ -909,11 +1060,23 @@
           if (dist > 5) {
             pushUndoState();
             drawArrowOnImage(arrowStart, arrowCurrent);
-            setStatus(`已添加箭头`);
+            setStatus("已添加箭头");
           }
         }
         arrowStart = null;
         arrowCurrent = null;
+      } else if (dragType === "line") {
+        selecting = false;
+        if (lineStart && lineCurrent) {
+          const dist = Math.hypot(lineCurrent.x - lineStart.x, lineCurrent.y - lineStart.y);
+          if (dist > 2) {
+            pushUndoState();
+            drawLineOnImage(lineStart, lineCurrent);
+            setStatus("已添加线条");
+          }
+        }
+        lineStart = null;
+        lineCurrent = null;
       } else {
         const isPlainClick = dragMode === "replace"
           && dragStartY !== null
@@ -952,11 +1115,14 @@
       mosaicCurrent = null;
       arrowStart = null;
       arrowCurrent = null;
+      lineStart = null;
+      lineCurrent = null;
 
       const names = {
         range: "删除区间选择：拖拽选择要删除的垂直区间",
         mosaic: `马赛克：拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
-        arrow: "画箭头：拖拽绘制渐进式箭头",
+        arrow: `画箭头：拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
+        line: `划线：拖拽绘制直线，可调整颜色和粗细（${getStrokeWidth()}px）`,
         number: `数字标注：点击图片放置数字 ${numberCounter}`
       };
 
@@ -968,8 +1134,8 @@
     btnSelect.addEventListener("click", () => setTool("range"));
     btnMosaic.addEventListener("click", () => setTool("mosaic"));
     btnArrow.addEventListener("click", () => setTool("arrow"));
+    btnLine.addEventListener("click", () => setTool("line"));
     btnNumber.addEventListener("click", () => setTool("number"));
-
     btnZoomReset.addEventListener("click", () => {
       if (!imageData) return;
       zoomScale = 1;
@@ -1030,17 +1196,17 @@
       render();
     }
 
+
     function transformAnnotations(ranges) {
       for (const ann of annotations) {
         if (ann.type === "number") {
           ann.pos.y = calculateNewY(ann.pos.y, ranges);
-        } else if (ann.type === "arrow") {
+        } else if (ann.type === "arrow" || ann.type === "line") {
           ann.from.y = calculateNewY(ann.from.y, ranges);
           ann.to.y = calculateNewY(ann.to.y, ranges);
         }
       }
     }
-
     function calculateNewY(oldY, ranges) {
       let offset = 0;
       for (const r of ranges) {
@@ -1115,11 +1281,11 @@
 
     window.addEventListener("paste", handlePaste);
     canvasBox.addEventListener("wheel", updateZoomByWheel, { passive: false });
+
     window.addEventListener("keydown", (event) => {
       const key = event.key.toLowerCase();
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
 
-      // 工具快捷键 (不需 Ctrl)
       if (!ctrlOrMeta && imageData) {
         if (key === "s") {
           event.preventDefault();
@@ -1129,6 +1295,11 @@
         if (key === "a") {
           event.preventDefault();
           setTool("arrow");
+          return;
+        }
+        if (key === "l") {
+          event.preventDefault();
+          setTool("line");
           return;
         }
         if (key === "n") {
@@ -1144,9 +1315,9 @@
         if (key === "delete") {
           if (selectedAnnotation) {
             pushUndoState();
-            annotations = annotations.filter(a => a !== selectedAnnotation);
+            annotations = annotations.filter((a) => a !== selectedAnnotation);
             selectedAnnotation = null;
-            setStatus("已删除选中的标注");
+            setStatus("已删除选中的标注。");
             render();
             return;
           }
@@ -1160,7 +1331,6 @@
 
       if (!ctrlOrMeta) return;
 
-      // 功能快捷键 (需 Ctrl)
       if (key === "z" && !event.shiftKey) {
         if (!btnUndo.disabled) {
           event.preventDefault();
@@ -1178,10 +1348,27 @@
       if (key === "m") {
         event.preventDefault();
         setTool("mosaic");
-        return;
       }
     });
 
+    strokeColorInput.addEventListener("input", () => {
+      if (!imageData) return;
+      render();
+      if (currentTool === "arrow" || currentTool === "line") {
+        setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
+      }
+    });
+
+    strokeWidthInput.addEventListener("input", () => {
+      syncStrokeControls();
+      if (!imageData) return;
+      render();
+      if (currentTool === "arrow" || currentTool === "line") {
+        setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
+      }
+    });
+
+    syncStrokeControls();
     setStatus("等待粘贴图片...");
     updateButtons();
   </script>
