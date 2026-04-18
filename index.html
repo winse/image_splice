@@ -279,7 +279,7 @@
           </svg>
         </a>
       </div>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“画箭头/数字”绘制标注；在标注模式下可直接<b>拖拽移动</b>元素，选中后按 <b>Delete</b> 删除。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“画箭头/数字”绘制标注；“划线”时按住 <b>Shift</b> 可锁定水平线；在标注模式下可直接<b>拖拽移动</b>元素，选中后按 <b>Delete</b> 删除。</p>
     </section>
 
     <section class="panel toolbar">
@@ -379,6 +379,7 @@
     let arrowCurrent = null;
     let lineStart = null;
     let lineCurrent = null;
+    let isShiftPressed = false;
     const CUT_GAP_PX = 1;
     const CUT_GAP_COLOR = "#ffffff";
     const MOSAIC_BLOCK = 12;
@@ -611,7 +612,8 @@
         } else if (dragType === "arrow" && arrowStart && arrowCurrent) {
           parts.push(`<span>箭头长度: ${Math.round(Math.hypot(arrowCurrent.x - arrowStart.x, arrowCurrent.y - arrowStart.y))}px</span>`);
         } else if (dragType === "line" && lineStart && lineCurrent) {
-          parts.push(`<span>线段长度: ${Math.round(Math.hypot(lineCurrent.x - lineStart.x, lineCurrent.y - lineStart.y))}px</span>`);
+          const lineEnd = getPreviewLineEnd();
+          parts.push(`<span>线段长度: ${Math.round(Math.hypot(lineEnd.x - lineStart.x, lineEnd.y - lineStart.y))}px</span>`);
         }
       }
       parts.push(`<span>当前工具: ${getToolName(currentTool)}</span>`);
@@ -637,6 +639,16 @@
       const h = Math.max(0, Math.round(y2 - y1));
       if (w <= 0 || h <= 0) return null;
       return { x: Math.round(x1), y: Math.round(y1), w, h };
+    }
+
+    function constrainLinePoint(from, to, lockHorizontal = false) {
+      if (!from || !to) return to;
+      if (!lockHorizontal) return to;
+      return { x: to.x, y: from.y };
+    }
+
+    function getPreviewLineEnd() {
+      return constrainLinePoint(lineStart, lineCurrent, isShiftPressed);
     }
 
 
@@ -677,7 +689,7 @@
       }
 
       if (selecting && dragType === "line" && lineStart && lineCurrent) {
-        drawLine(ctx, lineStart, lineCurrent, {
+        drawLine(ctx, lineStart, getPreviewLineEnd(), {
           color: getStrokeColor(),
           width: getStrokeWidth()
         });
@@ -998,6 +1010,7 @@
 
     window.addEventListener("mousemove", (e) => {
       if (!imageData) return;
+      isShiftPressed = e.shiftKey;
       const p = getCanvasPoint(e);
 
       if (draggingAnnotation) {
@@ -1067,11 +1080,12 @@
         arrowCurrent = null;
       } else if (dragType === "line") {
         selecting = false;
-        if (lineStart && lineCurrent) {
-          const dist = Math.hypot(lineCurrent.x - lineStart.x, lineCurrent.y - lineStart.y);
+        const lineEnd = constrainLinePoint(lineStart, lineCurrent, e.shiftKey);
+        if (lineStart && lineEnd) {
+          const dist = Math.hypot(lineEnd.x - lineStart.x, lineEnd.y - lineStart.y);
           if (dist > 2) {
             pushUndoState();
-            drawLineOnImage(lineStart, lineCurrent);
+            drawLineOnImage(lineStart, lineEnd);
             setStatus("已添加线条");
           }
         }
@@ -1122,7 +1136,7 @@
         range: "删除区间选择：拖拽选择要删除的垂直区间",
         mosaic: `马赛克：拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
         arrow: `画箭头：拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
-        line: `划线：拖拽绘制直线，可调整颜色和粗细（${getStrokeWidth()}px）`,
+        line: `划线：拖拽绘制直线，按 Shift 锁定水平，可调整颜色和粗细（${getStrokeWidth()}px）`,
         number: `数字标注：点击图片放置数字 ${numberCounter}`
       };
 
@@ -1283,6 +1297,13 @@
     canvasBox.addEventListener("wheel", updateZoomByWheel, { passive: false });
 
     window.addEventListener("keydown", (event) => {
+      if (event.key === "Shift") {
+        isShiftPressed = true;
+        if (selecting && dragType === "line") {
+          render();
+        }
+      }
+
       const key = event.key.toLowerCase();
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
 
@@ -1348,6 +1369,14 @@
       if (key === "m") {
         event.preventDefault();
         setTool("mosaic");
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      if (event.key !== "Shift") return;
+      isShiftPressed = false;
+      if (selecting && dragType === "line") {
+        render();
       }
     });
 
