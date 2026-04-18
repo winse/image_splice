@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 
 <head>
@@ -279,24 +279,24 @@
           </svg>
         </a>
       </div>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“画箭头/数字”绘制标注；“划线”时按住 <b>Shift</b> 可锁定水平线；在标注模式下可直接<b>拖拽移动</b>元素，选中后按 <b>Delete</b> 删除。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；首次粘贴载入主图，再次 <b>Ctrl + V</b> 会按鼠标位置追加图片。所有添加元素都可统一<b>选择、拖拽移动、Delete 删除</b>。拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“画箭头/数字”绘制标注；“划线”时按住 <b>Shift</b> 可锁定水平线。</p>
     </section>
 
     <section class="panel toolbar">
       <div class="tool-group">
-        <button id="btnUndo" disabled>撤销 (Ctrl+Z)</button>
-        <button id="btnRedo" disabled>重做 (Ctrl+Y)</button>
+        <button id="btnUndo" title="撤销 (Ctrl+Z)" disabled>撤销</button>
+        <button id="btnRedo" title="重做 (Ctrl+Y)" disabled>重做</button>
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
-        <button id="btnSelect" class="btn-tool" disabled>选择删除区间 (S)</button>
+        <button id="btnSelect" class="btn-tool" title="选择删除区间 (S)" disabled>删除区间</button>
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
-        <button id="btnMosaic" class="btn-tool" disabled>矩形马赛克 (M)</button>
-        <button id="btnArrow" class="btn-tool" disabled>画箭头 (A)</button>
-        <button id="btnLine" class="btn-tool" disabled>划线 (L)</button>
-        <button id="btnNumber" class="btn-tool" disabled>数字标注 (N)</button>
+        <button id="btnMosaic" class="btn-tool" title="矩形马赛克 (M)" disabled>马赛克(M)</button>
+        <button id="btnArrow" class="btn-tool" title="画箭头 (A)" disabled>箭头(A)</button>
+        <button id="btnLine" class="btn-tool" title="划线 (L)" disabled>线(L)</button>
+        <button id="btnNumber" class="btn-tool" title="数字标注 (N)" disabled>数字(N)</button>
       </div>
 
       <div class="tool-divider" aria-hidden="true"></div>
@@ -366,9 +366,13 @@
     let dragCurrentY = null;
     let currentTool = "range"; // "range", "mosaic", "arrow", "line", "number"
     let annotations = []; // 存储 { type, data }
+    let pastedImages = []; // 存储 { src, x, y, width, height }
     let draggingAnnotation = null;
+    let draggingPastedImage = null;
     let selectedAnnotation = null;
+    let selectedPastedImage = null;
     let dragAnnotationOffset = { x: 0, y: 0 };
+    let dragPastedImageOffset = { x: 0, y: 0 };
     let numberCounter = 1;
     let cutRanges = [];
     let dragType = "range";
@@ -380,6 +384,8 @@
     let lineStart = null;
     let lineCurrent = null;
     let isShiftPressed = false;
+    let lastPointerCanvasPoint = null;
+    let hasMovedDuringDrag = false;
     const CUT_GAP_PX = 1;
     const CUT_GAP_COLOR = "#ffffff";
     const MOSAIC_BLOCK = 12;
@@ -397,6 +403,7 @@
     const MAX_HISTORY = 30;
     const undoStack = [];
     const redoStack = [];
+    const pastedImageSourceCache = new Map();
 
     function setStatus(text) {
       statusEl.textContent = text;
@@ -419,6 +426,52 @@
         color: ann.color || DEFAULT_STROKE_COLOR,
         width: Math.max(1, Number(ann.width) || DEFAULT_STROKE_WIDTH)
       };
+    }
+
+    function clearSelectedElement() {
+      selectedAnnotation = null;
+      selectedPastedImage = null;
+    }
+
+    function getSelectedElement() {
+      if (selectedAnnotation) return { kind: "annotation", item: selectedAnnotation };
+      if (selectedPastedImage) return { kind: "pastedImage", item: selectedPastedImage };
+      return null;
+    }
+
+    function setSelectedElement(kind, item) {
+      selectedAnnotation = kind === "annotation" ? item : null;
+      selectedPastedImage = kind === "pastedImage" ? item : null;
+    }
+
+    function isSelectedElement(kind, item) {
+      return (kind === "annotation" ? selectedAnnotation : selectedPastedImage) === item;
+    }
+
+    function getSelectedStrokeAnnotation() {
+      return selectedAnnotation && (selectedAnnotation.type === "line" || selectedAnnotation.type === "arrow")
+        ? selectedAnnotation
+        : null;
+    }
+
+    function getElementLabel(target) {
+      if (!target) return "";
+      if (target.kind === "pastedImage") return "追加图片";
+      if (target.item.type === "number") return "数字";
+      if (target.item.type === "line") return "线条";
+      if (target.item.type === "arrow") return "箭头";
+      return "元素";
+    }
+
+    function describeSelectedElement(target) {
+      if (!target) return "";
+      if (target.kind === "pastedImage") {
+        return `追加图位置: x=${Math.round(target.item.x)}, y=${Math.round(target.item.y)}`;
+      }
+      if (target.item.type === "number") {
+        return `数字位置: x=${Math.round(target.item.pos.x)}, y=${Math.round(target.item.pos.y)}`;
+      }
+      return `${getElementLabel(target)}起点: x=${Math.round(target.item.from.x)}, y=${Math.round(target.item.from.y)}`;
     }
 
     function hasSelection() {
@@ -529,7 +582,7 @@
       btnReset.disabled = !hasImage;
       btnSave.disabled = !hasImage;
 
-      if (hasImage && (selectedAnnotation || hasSelection())) {
+      if (hasImage && (getSelectedElement() || hasSelection())) {
         btnQuickDelete.style.display = "inline-block";
       } else {
         btnQuickDelete.style.display = "none";
@@ -538,7 +591,7 @@
       const showStroke = hasImage && (
         currentTool === "line" ||
         currentTool === "arrow" ||
-        (selectedAnnotation && (selectedAnnotation.type === "line" || selectedAnnotation.type === "arrow"))
+        !!getSelectedStrokeAnnotation()
       );
       document.getElementById("strokeConfig").style.display = showStroke ? "inline-flex" : "none";
     }
@@ -553,13 +606,20 @@
       return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
     }
 
+    function clonePastedImages(src = []) {
+      return src.map((item) => ({ ...item }));
+    }
+
     function applyImageData(nextState) {
-      const { data, anns, counter } = nextState;
+      const { data, anns, layers, counter } = nextState;
       canvas.width = data.width;
       canvas.height = data.height;
       imageData = cloneImageData(data);
       annotations = JSON.parse(JSON.stringify(anns || []));
-      selectedAnnotation = null;
+      pastedImages = clonePastedImages(layers || []);
+      clearSelectedElement();
+      draggingAnnotation = null;
+      draggingPastedImage = null;
       numberCounter = counter || 1;
       clearSelection();
       render();
@@ -570,6 +630,7 @@
       undoStack.push({
         data: cloneImageData(imageData),
         anns: JSON.parse(JSON.stringify(annotations)),
+        layers: clonePastedImages(pastedImages),
         counter: numberCounter
       });
       if (undoStack.length > MAX_HISTORY) undoStack.shift();
@@ -592,6 +653,9 @@
         `<span>宽度: ${canvas.width}px</span>`,
         `<span>高度: ${canvas.height}px</span>`
       ];
+      if (pastedImages.length > 0) {
+        parts.push(`<span>追加图片: ${pastedImages.length} 张</span>`);
+      }
       const ranges = getPreviewRanges();
       if (ranges.length > 0) {
         parts.push(`<span>区间数: ${ranges.length}</span>`);
@@ -616,13 +680,18 @@
           parts.push(`<span>线段长度: ${Math.round(Math.hypot(lineEnd.x - lineStart.x, lineEnd.y - lineStart.y))}px</span>`);
         }
       }
+      const selectedElement = getSelectedElement();
+      if (selectedElement) {
+        parts.push(`<span>已选中: ${getElementLabel(selectedElement)}</span>`);
+        parts.push(`<span>${describeSelectedElement(selectedElement)}</span>`);
+      }
       parts.push(`<span>当前工具: ${getToolName(currentTool)}</span>`);
       metricsEl.innerHTML = parts.join("");
     }
 
 
     function getToolName(tool) {
-      if (tool === "range") return "删除区间选择";
+      if (tool === "range") return "删除区间";
       if (tool === "mosaic") return "矩形马赛克";
       if (tool === "arrow") return "画箭头";
       if (tool === "line") return "划线";
@@ -649,6 +718,249 @@
 
     function getPreviewLineEnd() {
       return constrainLinePoint(lineStart, lineCurrent, isShiftPressed);
+    }
+
+    function createPastedImageSnapshot(img) {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = img.naturalWidth || img.width;
+      tempCanvas.height = img.naturalHeight || img.height;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.drawImage(img, 0, 0, tempCanvas.width, tempCanvas.height);
+      const src = tempCanvas.toDataURL("image/png");
+      pastedImageSourceCache.set(src, tempCanvas);
+      return {
+        src,
+        width: tempCanvas.width,
+        height: tempCanvas.height
+      };
+    }
+
+    function getPastedImageSource(layer) {
+      return pastedImageSourceCache.get(layer.src) || null;
+    }
+
+    function getCanvasPointFromClient(clientX, clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    }
+
+    function updatePointerCanvasPoint(clientX, clientY) {
+      if (!imageData) {
+        lastPointerCanvasPoint = null;
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const inside = clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+      lastPointerCanvasPoint = inside ? getCanvasPointFromClient(clientX, clientY) : null;
+    }
+
+    function expandBaseCanvas(nextWidth, nextHeight) {
+      if (!imageData) return;
+      if (nextWidth <= canvas.width && nextHeight <= canvas.height) return;
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = Math.max(nextWidth, canvas.width);
+      tempCanvas.height = Math.max(nextHeight, canvas.height);
+      const tctx = tempCanvas.getContext("2d");
+      tctx.fillStyle = "#ffffff";
+      tctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+      tctx.putImageData(imageData, 0, 0);
+      canvas.width = tempCanvas.width;
+      canvas.height = tempCanvas.height;
+      imageData = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+    }
+
+    function getPastePosition(snapshot) {
+      if (!imageData) return { x: 0, y: 0 };
+      if (lastPointerCanvasPoint) {
+        return {
+          x: Math.max(0, Math.round(lastPointerCanvasPoint.x)),
+          y: Math.max(0, Math.round(lastPointerCanvasPoint.y))
+        };
+      }
+      return {
+        x: Math.max(0, Math.round((canvas.width - snapshot.width) / 2)),
+        y: Math.max(0, Math.round((canvas.height - snapshot.height) / 2))
+      };
+    }
+
+    function appendImageToCanvas(img) {
+      if (!imageData) {
+        loadImageToCanvas(img);
+        return;
+      }
+      const snapshot = createPastedImageSnapshot(img);
+      const pastePos = getPastePosition(snapshot);
+      pushUndoState();
+      expandBaseCanvas(
+        Math.max(canvas.width, pastePos.x + snapshot.width),
+        Math.max(canvas.height, pastePos.y + snapshot.height)
+      );
+      const layer = {
+        src: snapshot.src,
+        x: pastePos.x,
+        y: pastePos.y,
+        width: snapshot.width,
+        height: snapshot.height
+      };
+      pastedImages.push(layer);
+      setSelectedElement("pastedImage", layer);
+      clearSelection();
+      setStatus(`已追加图片: ${snapshot.width} x ${snapshot.height}，放置在 x=${layer.x}, y=${layer.y}`);
+      render();
+    }
+
+    function commitPastedImagesToBase() {
+      if (!imageData || pastedImages.length === 0) return;
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.putImageData(imageData, 0, 0);
+      for (const layer of pastedImages) {
+        const source = getPastedImageSource(layer);
+        if (!source) continue;
+        tctx.drawImage(source, layer.x, layer.y, layer.width, layer.height);
+      }
+      imageData = tctx.getImageData(0, 0, canvas.width, canvas.height);
+      pastedImages = [];
+      clearSelectedElement();
+      draggingPastedImage = null;
+    }
+
+    function drawPastedImageSelection(layer) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 4]);
+      ctx.strokeRect(layer.x + 1, layer.y + 1, Math.max(0, layer.width - 2), Math.max(0, layer.height - 2));
+      ctx.restore();
+    }
+
+    function findPastedImageAt(p) {
+      const padding = 5;
+      for (let i = pastedImages.length - 1; i >= 0; i--) {
+        const layer = pastedImages[i];
+        if (
+          p.x >= layer.x - padding &&
+          p.x <= layer.x + layer.width + padding &&
+          p.y >= layer.y - padding &&
+          p.y <= layer.y + layer.height + padding
+        ) {
+          return layer;
+        }
+      }
+      return null;
+    }
+
+    function clampPastedImagePosition(layer, x, y) {
+      const nextWidth = Math.max(canvas.width, Math.round(x + layer.width));
+      const nextHeight = Math.max(canvas.height, Math.round(y + layer.height));
+      expandBaseCanvas(nextWidth, nextHeight);
+      return {
+        x: Math.max(0, Math.round(x)),
+        y: Math.max(0, Math.round(y))
+      };
+    }
+
+    function findElementAt(p) {
+      const ann = findAnnotationAt(p);
+      if (ann) return { kind: "annotation", item: ann };
+      const layer = findPastedImageAt(p);
+      if (layer) return { kind: "pastedImage", item: layer };
+      return null;
+    }
+
+    function startDraggingElement(target, p) {
+      if (!target) return false;
+      // 只有开始移动时才推入撤销栈，避免单纯点击造成撤销栈膨胀
+      // pushUndoState(); // 移动到鼠标开始移动处
+      setSelectedElement(target.kind, target.item);
+      if (target.kind === "pastedImage") {
+        draggingPastedImage = target.item;
+        dragPastedImageOffset = { x: p.x - target.item.x, y: p.y - target.item.y };
+      } else {
+        draggingAnnotation = target.item;
+        if (target.item.type === "number") {
+          dragAnnotationOffset = { x: p.x - target.item.pos.x, y: p.y - target.item.pos.y };
+        } else {
+          dragAnnotationOffset = { x: p.x, y: p.y };
+        }
+      }
+      setStatus(`已选中${getElementLabel(target)}，拖拽可移动，按 Delete 键或点击按钮移除`);
+      return true;
+    }
+
+    function moveDraggingElement(p) {
+      if (draggingPastedImage || draggingAnnotation) {
+        if (!hasMovedDuringDrag) {
+          pushUndoState();
+          hasMovedDuringDrag = true;
+        }
+      }
+      if (draggingPastedImage) {
+        const nextPos = clampPastedImagePosition(
+          draggingPastedImage,
+          p.x - dragPastedImageOffset.x,
+          p.y - dragPastedImageOffset.y
+        );
+        draggingPastedImage.x = nextPos.x;
+        draggingPastedImage.y = nextPos.y;
+        return true;
+      }
+
+      if (draggingAnnotation) {
+        if (draggingAnnotation.type === "number") {
+          draggingAnnotation.pos.x = p.x - dragAnnotationOffset.x;
+          draggingAnnotation.pos.y = p.y - dragAnnotationOffset.y;
+        } else if (draggingAnnotation.type === "arrow" || draggingAnnotation.type === "line") {
+          const dx = p.x - dragAnnotationOffset.x;
+          const dy = p.y - dragAnnotationOffset.y;
+          draggingAnnotation.from.x += dx;
+          draggingAnnotation.from.y += dy;
+          draggingAnnotation.to.x += dx;
+          draggingAnnotation.to.y += dy;
+          dragAnnotationOffset = { x: p.x, y: p.y };
+        }
+        return true;
+      }
+
+      return false;
+    }
+
+    function finishDraggingElement() {
+      if (draggingPastedImage) {
+        setStatus(`追加图片位置已更新: x=${Math.round(draggingPastedImage.x)}, y=${Math.round(draggingPastedImage.y)}`);
+        draggingPastedImage = null;
+        render();
+        return true;
+      }
+      if (draggingAnnotation) {
+        setStatus(`${getElementLabel({ kind: "annotation", item: draggingAnnotation })}位置已更新`);
+        draggingAnnotation = null;
+        render();
+        return true;
+      }
+      return false;
+    }
+
+    function deleteSelectedElement() {
+      const target = getSelectedElement();
+      if (!target) return false;
+      pushUndoState();
+      if (target.kind === "pastedImage") {
+        pastedImages = pastedImages.filter((item) => item !== target.item);
+      } else {
+        annotations = annotations.filter((item) => item !== target.item);
+      }
+      clearSelectedElement();
+      setStatus(`已删除选中的${getElementLabel(target)}`);
+      render();
+      return true;
     }
 
 
@@ -788,6 +1100,29 @@
       annotations.push({ type: "number", pos: { ...pos }, val: num });
     }
 
+    function exportCanvasDataUrl() {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.putImageData(imageData, 0, 0);
+      for (const layer of pastedImages) {
+        const source = getPastedImageSource(layer);
+        if (!source) continue;
+        tctx.drawImage(source, layer.x, layer.y, layer.width, layer.height);
+      }
+      for (const ann of annotations) {
+        if (ann.type === "arrow") {
+          drawArrow(tctx, ann.from, ann.to, ann);
+        } else if (ann.type === "line") {
+          drawLine(tctx, ann.from, ann.to, ann);
+        } else if (ann.type === "number") {
+          drawNumber(tctx, ann.pos, ann.val);
+        }
+      }
+      return tempCanvas.toDataURL("image/png");
+    }
+
     function render() {
       if (!imageData) {
         canvas.hidden = true;
@@ -798,26 +1133,14 @@
       empty.hidden = true;
       applyCanvasZoom();
       ctx.putImageData(imageData, 0, 0);
-      for (const ann of annotations) {
-        if (ann === selectedAnnotation) {
-          ctx.save();
-          ctx.strokeStyle = "rgba(0, 120, 215, 0.6)";
-          if (ann.type === "number") {
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.arc(ann.pos.x, ann.pos.y, NUMBER_SIZE * 0.9, 0, Math.PI * 2);
-            ctx.stroke();
-          } else if (ann.type === "arrow" || ann.type === "line") {
-            ctx.lineWidth = getAnnotationStroke(ann).width + 4;
-            ctx.lineCap = "round";
-            ctx.beginPath();
-            ctx.moveTo(ann.from.x, ann.from.y);
-            ctx.lineTo(ann.to.x, ann.to.y);
-            ctx.stroke();
-          }
-          ctx.restore();
+      for (const layer of pastedImages) {
+        const source = getPastedImageSource(layer);
+        if (source) {
+          ctx.drawImage(source, layer.x, layer.y, layer.width, layer.height);
         }
+      }
 
+      for (const ann of annotations) {
         if (ann.type === "arrow") {
           drawArrow(ctx, ann.from, ann.to, ann);
         } else if (ann.type === "line") {
@@ -826,6 +1149,34 @@
           drawNumber(ctx, ann.pos, ann.val);
         }
       }
+
+      // 最后统一绘制选中状态，确保在高层不被覆盖
+      for (const layer of pastedImages) {
+        if (isSelectedElement("pastedImage", layer)) {
+          drawPastedImageSelection(layer);
+        }
+      }
+      for (const ann of annotations) {
+        if (isSelectedElement("annotation", ann)) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(0, 120, 215, 0.9)"; // 稍微加深选中边框颜色
+          if (ann.type === "number") {
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(ann.pos.x, ann.pos.y, NUMBER_SIZE * 0.9, 0, Math.PI * 2);
+            ctx.stroke();
+          } else if (ann.type === "arrow" || ann.type === "line") {
+            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(ann.from.x, ann.from.y);
+            ctx.lineTo(ann.to.x, ann.to.y);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+
       drawSelectionOverlay();
       updateButtons();
       updateMetrics();
@@ -860,7 +1211,10 @@
       originalData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       zoomScale = 1;
       annotations = [];
-      selectedAnnotation = null;
+      pastedImages = [];
+      clearSelectedElement();
+      draggingAnnotation = null;
+      draggingPastedImage = null;
       numberCounter = 1;
       clearSelection();
       clearHistory();
@@ -878,7 +1232,11 @@
           const url = URL.createObjectURL(file);
           const img = new Image();
           img.onload = () => {
-            loadImageToCanvas(img);
+            if (imageData) {
+              appendImageToCanvas(img);
+            } else {
+              loadImageToCanvas(img);
+            }
             URL.revokeObjectURL(url);
           };
           img.onerror = () => {
@@ -900,13 +1258,7 @@
     }
 
     function getCanvasPoint(event) {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      return {
-        x: (event.clientX - rect.left) * scaleX,
-        y: (event.clientY - rect.top) * scaleY
-      };
+      return getCanvasPointFromClient(event.clientX, event.clientY);
     }
 
     function mosaicRectOnCurrentImage(rect, blockSize) {
@@ -951,26 +1303,15 @@
     canvas.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
       if (!imageData) return;
+      updatePointerCanvasPoint(e.clientX, e.clientY);
       const p = getCanvasPoint(e);
-
-      if (currentTool === "arrow" || currentTool === "line" || currentTool === "number") {
-        const hit = findAnnotationAt(p);
-        if (hit) {
-          pushUndoState();
-          draggingAnnotation = hit;
-          selectedAnnotation = hit;
-          if (hit.type === "number") {
-            dragAnnotationOffset = { x: p.x - hit.pos.x, y: p.y - hit.pos.y };
-          } else {
-            dragAnnotationOffset = { x: p.x, y: p.y };
-          }
-          const label = hit.type === "number" ? "数字" : hit.type === "line" ? "线条" : "箭头";
-          setStatus(`已选中${label}，拖拽可移动，按 Delete 键或点击按钮移除`);
-          render();
-          return;
-        }
-        selectedAnnotation = null;
+      const hit = findElementAt(p);
+      hasMovedDuringDrag = false;
+      if (startDraggingElement(hit, p)) {
+        render();
+        return;
       }
+      clearSelectedElement();
 
       selecting = true;
       dragType = currentTool;
@@ -1011,21 +1352,10 @@
     window.addEventListener("mousemove", (e) => {
       if (!imageData) return;
       isShiftPressed = e.shiftKey;
+      updatePointerCanvasPoint(e.clientX, e.clientY);
       const p = getCanvasPoint(e);
 
-      if (draggingAnnotation) {
-        if (draggingAnnotation.type === "number") {
-          draggingAnnotation.pos.x = p.x - dragAnnotationOffset.x;
-          draggingAnnotation.pos.y = p.y - dragAnnotationOffset.y;
-        } else if (draggingAnnotation.type === "arrow" || draggingAnnotation.type === "line") {
-          const dx = p.x - dragAnnotationOffset.x;
-          const dy = p.y - dragAnnotationOffset.y;
-          draggingAnnotation.from.x += dx;
-          draggingAnnotation.from.y += dy;
-          draggingAnnotation.to.x += dx;
-          draggingAnnotation.to.y += dy;
-          dragAnnotationOffset = { x: p.x, y: p.y };
-        }
+      if (moveDraggingElement(p)) {
         render();
         return;
       }
@@ -1046,10 +1376,7 @@
 
     window.addEventListener("mouseup", (e) => {
       if (e.button !== 0) return;
-      if (draggingAnnotation) {
-        draggingAnnotation = null;
-        setStatus("移动完成。");
-        render();
+      if (finishDraggingElement()) {
         return;
       }
 
@@ -1061,6 +1388,7 @@
         mosaicCurrent = null;
         if (rect) {
           pushUndoState();
+          commitPastedImagesToBase();
           imageData = mosaicRectOnCurrentImage(rect, MOSAIC_BLOCK);
           setStatus(`已完成马赛克: x=${rect.x}, y=${rect.y}, ${rect.w}x${rect.h}px`);
         } else {
@@ -1133,7 +1461,7 @@
       lineCurrent = null;
 
       const names = {
-        range: "删除区间选择：拖拽选择要删除的垂直区间",
+        range: "删除区间选择：拖拽选择要删除的垂直区间，也可选择和移动已添加元素",
         mosaic: `马赛克：拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
         arrow: `画箭头：拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
         line: `划线：拖拽绘制直线，按 Shift 锁定水平，可调整颜色和粗细（${getStrokeWidth()}px）`,
@@ -1170,6 +1498,7 @@
       const oldCanvas = document.createElement("canvas");
       oldCanvas.width = canvas.width;
       oldCanvas.height = canvas.height;
+      // commitPastedImagesToBase(); // 移除强制合并，改为坐标转换
       oldCanvas.getContext("2d").putImageData(imageData, 0, 0);
 
       const gapTotal = CUT_GAP_PX * ranges.length;
@@ -1197,8 +1526,9 @@
         nctx.drawImage(oldCanvas, 0, srcY, canvas.width, tailH, 0, dstY, canvas.width, tailH);
       }
 
-      // 裁剪时同步更新注解坐标
+      // 裁剪时同步更新注解和图层坐标
       transformAnnotations(ranges);
+      transformPastedImages(ranges);
 
       canvas.width = newCanvas.width;
       canvas.height = newCanvas.height;
@@ -1221,6 +1551,11 @@
         }
       }
     }
+    function transformPastedImages(ranges) {
+      for (const layer of pastedImages) {
+        layer.y = calculateNewY(layer.y, ranges);
+      }
+    }
     function calculateNewY(oldY, ranges) {
       let offset = 0;
       for (const r of ranges) {
@@ -1239,6 +1574,7 @@
       applyImageData({
         data: originalData,
         anns: [],
+        layers: [],
         counter: 1
       });
       setStatus(`已恢复初始图片: ${canvas.width} x ${canvas.height}`);
@@ -1249,6 +1585,7 @@
       redoStack.push({
         data: cloneImageData(imageData),
         anns: JSON.parse(JSON.stringify(annotations)),
+        layers: clonePastedImages(pastedImages),
         counter: numberCounter
       });
       const prev = undoStack.pop();
@@ -1262,6 +1599,7 @@
       undoStack.push({
         data: cloneImageData(imageData),
         anns: JSON.parse(JSON.stringify(annotations)),
+        layers: clonePastedImages(pastedImages),
         counter: numberCounter
       });
       const next = redoStack.pop();
@@ -1274,18 +1612,13 @@
       if (!imageData) return;
       const link = document.createElement("a");
       link.download = `cut-splice-${Date.now()}.png`;
-      link.href = canvas.toDataURL("image/png");
+      link.href = exportCanvasDataUrl();
       link.click();
       setStatus("已触发下载。");
     });
 
     btnQuickDelete.addEventListener("click", () => {
-      if (selectedAnnotation) {
-        pushUndoState();
-        annotations = annotations.filter(a => a !== selectedAnnotation);
-        selectedAnnotation = null;
-        setStatus("已删除选中的标注");
-        render();
+      if (deleteSelectedElement()) {
         return;
       }
       if (imageData && hasSelection()) {
@@ -1334,12 +1667,7 @@
           return;
         }
         if (key === "delete") {
-          if (selectedAnnotation) {
-            pushUndoState();
-            annotations = annotations.filter((a) => a !== selectedAnnotation);
-            selectedAnnotation = null;
-            setStatus("已删除选中的标注。");
-            render();
+          if (deleteSelectedElement()) {
             return;
           }
           if (imageData && hasSelection()) {
