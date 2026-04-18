@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 
 <head>
@@ -297,6 +297,7 @@
         <button id="btnArrow" class="btn-tool" title="画箭头 (A)" disabled>箭头(A)</button>
         <button id="btnLine" class="btn-tool" title="划线 (L)" disabled>线(L)</button>
         <button id="btnNumber" class="btn-tool" title="数字标注 (N)" disabled>数字(N)</button>
+        <button id="btnText" class="btn-tool" title="文字标注 (T)" disabled>文字(T)</button>
       </div>
 
       <div class="tool-divider" aria-hidden="true"></div>
@@ -312,13 +313,26 @@
       <div class="tool-group" style="gap: 16px;">
         <div id="strokeConfig" class="tool-group" style="display: none;">
           <div class="tool-config">
-            <label for="strokeColor">颜色</label>
+            <!-- <label for="strokeColor">颜色</label> -->
             <input id="strokeColor" type="color" value="#ff4d4f" />
           </div>
           <div class="tool-config">
-            <label for="strokeWidth">粗细</label>
-            <input id="strokeWidth" type="range" min="1" max="24" step="1" value="4" />
+            <!-- <label for="strokeWidth">粗细/字号</label> -->
+            <input id="strokeWidth" type="range" min="1" max="64" step="1" value="4" />
             <output id="strokeWidthValue" for="strokeWidth">4px</output>
+          </div>
+        </div>
+        <div id="textConfig" class="tool-group" style="display: none;">
+          <div class="tool-config">
+            <!-- <label for="textAnnotationInput">内容</label> -->
+            <input id="textAnnotationInput" type="text" placeholder="输入文字" value="文字内容" style="width: 120px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 13px;" />
+          </div>
+          <div class="tool-divider" aria-hidden="true"></div>
+        </div>
+        <div id="numberConfig" class="tool-group" style="display: none;">
+          <div class="tool-config">
+            <label for="numberAnnotationInput">数字</label>
+            <input id="numberAnnotationInput" type="number" value="1" style="width: 80px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 13px;" />
           </div>
           <div class="tool-divider" aria-hidden="true"></div>
         </div>
@@ -351,6 +365,7 @@
     const btnArrow = document.getElementById("btnArrow");
     const btnLine = document.getElementById("btnLine");
     const btnNumber = document.getElementById("btnNumber");
+    const btnText = document.getElementById("btnText");
     const btnZoomReset = document.getElementById("btnZoomReset");
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
@@ -358,6 +373,10 @@
     const strokeColorInput = document.getElementById("strokeColor");
     const strokeWidthInput = document.getElementById("strokeWidth");
     const strokeWidthValue = document.getElementById("strokeWidthValue");
+    const textConfig = document.getElementById("textConfig");
+    const textAnnotationInput = document.getElementById("textAnnotationInput");
+    const numberConfig = document.getElementById("numberConfig");
+    const numberAnnotationInput = document.getElementById("numberAnnotationInput");
 
     let imageData = null;
     let originalData = null;
@@ -568,6 +587,7 @@
       btnArrow.disabled = !hasImage;
       btnLine.disabled = !hasImage;
       btnNumber.disabled = !hasImage;
+      btnText.disabled = !hasImage;
       strokeColorInput.disabled = !hasImage;
       strokeWidthInput.disabled = !hasImage;
 
@@ -577,6 +597,7 @@
       btnArrow.classList.toggle("active", hasImage && currentTool === "arrow");
       btnLine.classList.toggle("active", hasImage && currentTool === "line");
       btnNumber.classList.toggle("active", hasImage && currentTool === "number");
+      btnText.classList.toggle("active", hasImage && currentTool === "text");
 
       btnZoomReset.disabled = !hasImage;
       btnReset.disabled = !hasImage;
@@ -591,9 +612,13 @@
       const showStroke = hasImage && (
         currentTool === "line" ||
         currentTool === "arrow" ||
+        currentTool === "text" ||
+        currentTool === "number" ||
         !!getSelectedStrokeAnnotation()
       );
       document.getElementById("strokeConfig").style.display = showStroke ? "inline-flex" : "none";
+      textConfig.style.display = (hasImage && currentTool === "text") ? "inline-flex" : "none";
+      numberConfig.style.display = (hasImage && currentTool === "number") ? "inline-flex" : "none";
     }
 
     function applyCanvasZoom() {
@@ -621,6 +646,7 @@
       draggingAnnotation = null;
       draggingPastedImage = null;
       numberCounter = counter || 1;
+      if (numberAnnotationInput) numberAnnotationInput.value = numberCounter;
       clearSelection();
       render();
     }
@@ -696,6 +722,7 @@
       if (tool === "arrow") return "画箭头";
       if (tool === "line") return "划线";
       if (tool === "number") return "数字标注";
+      if (tool === "text") return "文字标注";
       return "未知";
     }
     function normalizeRect(a, b) {
@@ -885,7 +912,7 @@
         dragPastedImageOffset = { x: p.x - target.item.x, y: p.y - target.item.y };
       } else {
         draggingAnnotation = target.item;
-        if (target.item.type === "number") {
+        if (target.item.type === "number" || target.item.type === "text") {
           dragAnnotationOffset = { x: p.x - target.item.pos.x, y: p.y - target.item.pos.y };
         } else {
           dragAnnotationOffset = { x: p.x, y: p.y };
@@ -914,7 +941,7 @@
       }
 
       if (draggingAnnotation) {
-        if (draggingAnnotation.type === "number") {
+        if (draggingAnnotation.type === "number" || draggingAnnotation.type === "text") {
           draggingAnnotation.pos.x = p.x - dragAnnotationOffset.x;
           draggingAnnotation.pos.y = p.y - dragAnnotationOffset.y;
         } else if (draggingAnnotation.type === "arrow" || draggingAnnotation.type === "line") {
@@ -1055,22 +1082,32 @@
       pCtx.fill();
       pCtx.restore();
     }
-    function drawNumber(pCtx, pos, num) {
+    function drawNumber(pCtx, pos, num, color = NUMBER_COLOR, size = NUMBER_SIZE) {
       pCtx.save();
       const text = String(num);
-      pCtx.font = `bold ${NUMBER_SIZE}px Arial, sans-serif`;
-      const radius = NUMBER_SIZE * 0.7;
+      pCtx.font = `bold ${size}px Arial, sans-serif`;
+      const radius = size * 0.7;
       pCtx.fillStyle = NUMBER_BG;
       pCtx.beginPath();
       pCtx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
       pCtx.fill();
-      pCtx.strokeStyle = NUMBER_COLOR;
-      pCtx.lineWidth = 2;
+      pCtx.strokeStyle = color;
+      pCtx.lineWidth = Math.max(2, size / 12);
       pCtx.stroke();
-      pCtx.fillStyle = NUMBER_COLOR;
+      pCtx.fillStyle = color;
       pCtx.textAlign = "center";
       pCtx.textBaseline = "middle";
       pCtx.fillText(text, pos.x, pos.y);
+      pCtx.restore();
+    }
+
+    function drawText(pCtx, pos, textVal, color, size) {
+      pCtx.save();
+      pCtx.font = `bold ${size}px "Microsoft YaHei", sans-serif`;
+      pCtx.fillStyle = color;
+      pCtx.textAlign = "center";
+      pCtx.textBaseline = "middle";
+      pCtx.fillText(textVal, pos.x, pos.y);
       pCtx.restore();
     }
 
@@ -1097,7 +1134,17 @@
     }
 
     function drawNumberOnImage(pos, num) {
-      annotations.push({ type: "number", pos: { ...pos }, val: num });
+      const baseSize = 14;
+      const sizeMultiplier = 2;
+      const size = baseSize + parseInt(getStrokeWidth() || 4) * sizeMultiplier;
+      annotations.push({ type: "number", pos: { ...pos }, val: num, color: getStrokeColor(), size });
+    }
+
+    function drawTextOnImage(pos, textVal) {
+      const baseSize = 14;
+      const sizeMultiplier = 3;
+      const size = baseSize + parseInt(getStrokeWidth() || 4) * sizeMultiplier;
+      annotations.push({ type: "text", pos: { ...pos }, val: textVal, color: getStrokeColor(), size });
     }
 
     function exportCanvasDataUrl() {
@@ -1117,7 +1164,7 @@
         } else if (ann.type === "line") {
           drawLine(tctx, ann.from, ann.to, ann);
         } else if (ann.type === "number") {
-          drawNumber(tctx, ann.pos, ann.val);
+          drawNumber(tctx, ann.pos, ann.val, ann.color, ann.size);
         }
       }
       return tempCanvas.toDataURL("image/png");
@@ -1146,7 +1193,9 @@
         } else if (ann.type === "line") {
           drawLine(ctx, ann.from, ann.to, ann);
         } else if (ann.type === "number") {
-          drawNumber(ctx, ann.pos, ann.val);
+          drawNumber(ctx, ann.pos, ann.val, ann.color, ann.size);
+        } else if (ann.type === "text") {
+          drawText(ctx, ann.pos, ann.val, ann.color, ann.size);
         }
       }
 
@@ -1161,9 +1210,10 @@
           ctx.save();
           ctx.strokeStyle = "rgba(0, 120, 215, 0.9)"; // 稍微加深选中边框颜色
           if (ann.type === "number") {
+            const size = ann.size || NUMBER_SIZE;
             ctx.lineWidth = 4;
             ctx.beginPath();
-            ctx.arc(ann.pos.x, ann.pos.y, NUMBER_SIZE * 0.9, 0, Math.PI * 2);
+            ctx.arc(ann.pos.x, ann.pos.y, size * 0.9, 0, Math.PI * 2);
             ctx.stroke();
           } else if (ann.type === "arrow" || ann.type === "line") {
             ctx.lineWidth = getAnnotationStroke(ann).width + 6;
@@ -1172,6 +1222,13 @@
             ctx.moveTo(ann.from.x, ann.from.y);
             ctx.lineTo(ann.to.x, ann.to.y);
             ctx.stroke();
+          } else if (ann.type === "text") {
+            ctx.font = `bold ${ann.size}px "Microsoft YaHei", sans-serif`;
+            const metrics = ctx.measureText(ann.val);
+            const w = metrics.width + 16;
+            const h = ann.size + 16;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(ann.pos.x - w / 2, ann.pos.y - h / 2, w, h);
           }
           ctx.restore();
         }
@@ -1186,7 +1243,15 @@
       for (let i = annotations.length - 1; i >= 0; i--) {
         const ann = annotations[i];
         if (ann.type === "number") {
-          if (Math.hypot(p.x - ann.pos.x, p.y - ann.pos.y) < 20) return ann;
+          const size = ann.size || NUMBER_SIZE;
+          if (Math.hypot(p.x - ann.pos.x, p.y - ann.pos.y) < size * 0.8) return ann;
+        } else if (ann.type === "text") {
+          ctx.font = `bold ${ann.size}px "Microsoft YaHei", sans-serif`;
+          const metrics = ctx.measureText(ann.val);
+          const w = metrics.width + 16;
+          const h = ann.size + 16;
+          if (p.x >= ann.pos.x - w / 2 && p.x <= ann.pos.x + w / 2 &&
+            p.y >= ann.pos.y - h / 2 && p.y <= ann.pos.y + h / 2) return ann;
         } else if (ann.type === "arrow" || ann.type === "line") {
           const threshold = Math.max(10, getAnnotationStroke(ann).width + 6);
           if (isPointNearSegment(p, ann.from, ann.to, threshold)) return ann;
@@ -1327,10 +1392,20 @@
         lineCurrent = p;
       } else if (currentTool === "number") {
         pushUndoState();
-        drawNumberOnImage(p, numberCounter);
-        numberCounter++;
+        const numVal = parseInt(numberAnnotationInput.value) || numberCounter;
+        drawNumberOnImage(p, numVal);
+        numberCounter = numVal + 1;
+        numberAnnotationInput.value = numberCounter;
         selecting = false;
-        setStatus(`已添加数字 ${numberCounter - 1}`);
+        setStatus(`已添加数字 ${numVal}`);
+        render();
+        return;
+      } else if (currentTool === "text") {
+        pushUndoState();
+        const textVal = textAnnotationInput.value || "文字内容";
+        drawTextOnImage(p, textVal);
+        selecting = false;
+        setStatus(`已添加文字`);
         render();
         return;
       } else {
@@ -1465,7 +1540,8 @@
         mosaic: `马赛克：拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
         arrow: `画箭头：拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
         line: `划线：拖拽绘制直线，按 Shift 锁定水平，可调整颜色和粗细（${getStrokeWidth()}px）`,
-        number: `数字标注：点击图片放置数字 ${numberCounter}`
+        number: `数字标注：点击图片放置数字，可在上方数字框中重置和修改`,
+        text: `文字标注：在上方输入框修改文字和颜色大小，点击图片放置`
       };
 
       setStatus(`${names[tool]}`);
@@ -1478,6 +1554,7 @@
     btnArrow.addEventListener("click", () => setTool("arrow"));
     btnLine.addEventListener("click", () => setTool("line"));
     btnNumber.addEventListener("click", () => setTool("number"));
+    btnText.addEventListener("click", () => setTool("text"));
     btnZoomReset.addEventListener("click", () => {
       if (!imageData) return;
       zoomScale = 1;
@@ -1543,7 +1620,7 @@
 
     function transformAnnotations(ranges) {
       for (const ann of annotations) {
-        if (ann.type === "number") {
+        if (ann.type === "number" || ann.type === "text") {
           ann.pos.y = calculateNewY(ann.pos.y, ranges);
         } else if (ann.type === "arrow" || ann.type === "line") {
           ann.from.y = calculateNewY(ann.from.y, ranges);
@@ -1666,6 +1743,11 @@
           setTool("mosaic");
           return;
         }
+        if (key === "t") {
+          event.preventDefault();
+          setTool("text");
+          return;
+        }
         if (key === "delete") {
           if (deleteSelectedElement()) {
             return;
@@ -1722,6 +1804,13 @@
       render();
       if (currentTool === "arrow" || currentTool === "line") {
         setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
+      }
+    });
+
+    numberAnnotationInput.addEventListener("input", () => {
+      const val = parseInt(numberAnnotationInput.value);
+      if (!isNaN(val)) {
+        numberCounter = val;
       }
     });
 
