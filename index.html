@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 
 <head>
@@ -279,7 +279,7 @@
           </svg>
         </a>
       </div>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；首次粘贴载入主图，再次 <b>Ctrl + V</b> 会按鼠标位置追加图片。所有添加元素都可统一<b>选择、拖拽移动、Delete 删除</b>。拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“画箭头/数字”绘制标注；“划线”时按住 <b>Shift</b> 可锁定水平线。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；首次粘贴载入主图，再次 <b>Ctrl + V</b> 会按鼠标位置追加图片。所有添加元素都可统一<b>选择、拖拽移动、Delete 删除</b>。拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“标注”工具拖拽绘制；“划线/矩形/圆”时按住 <b>Shift</b> 可锁定水平/正方形/正圆；“圆/椭圆”从圆心开始绘制。</p>
     </section>
 
     <section class="panel toolbar">
@@ -296,6 +296,8 @@
         <button id="btnMosaic" class="btn-tool" title="矩形马赛克 (M)" disabled>马赛克(M)</button>
         <button id="btnArrow" class="btn-tool" title="画箭头 (A)" disabled>箭头(A)</button>
         <button id="btnLine" class="btn-tool" title="划线 (L)" disabled>线(L)</button>
+        <button id="btnRect" class="btn-tool" title="矩形 (R)" disabled>矩形(R)</button>
+        <button id="btnCircle" class="btn-tool" title="圆形 (C)" disabled>圆形(C)</button>
         <button id="btnNumber" class="btn-tool" title="数字标注 (N)" disabled>数字(N)</button>
         <button id="btnText" class="btn-tool" title="文字标注 (T)" disabled>文字(T)</button>
       </div>
@@ -336,7 +338,7 @@
           </div>
           <div class="tool-divider" aria-hidden="true"></div>
         </div>
-        <button id="btnQuickDelete" class="danger" style="display: none; padding: 4px 10px; font-weight: bold;">执行删除 (Delete)</button>
+        <button id="btnQuickDelete" class="danger" style="display: none; padding: 4px 10px; font-weight: bold;">删除 (Del)</button>
         <span id="status" class="status">等待粘贴图片...</span>
       </div>
     </section>
@@ -364,6 +366,8 @@
     const btnMosaic = document.getElementById("btnMosaic");
     const btnArrow = document.getElementById("btnArrow");
     const btnLine = document.getElementById("btnLine");
+    const btnRect = document.getElementById("btnRect");
+    const btnCircle = document.getElementById("btnCircle");
     const btnNumber = document.getElementById("btnNumber");
     const btnText = document.getElementById("btnText");
     const btnZoomReset = document.getElementById("btnZoomReset");
@@ -402,6 +406,10 @@
     let arrowCurrent = null;
     let lineStart = null;
     let lineCurrent = null;
+    let rectStart = null;
+    let rectCurrent = null;
+    let circleStart = null;
+    let circleCurrent = null;
     let isShiftPressed = false;
     let lastPointerCanvasPoint = null;
     let hasMovedDuringDrag = false;
@@ -468,7 +476,7 @@
     }
 
     function getSelectedStrokeAnnotation() {
-      return selectedAnnotation && (selectedAnnotation.type === "line" || selectedAnnotation.type === "arrow")
+      return selectedAnnotation && (selectedAnnotation.type === "line" || selectedAnnotation.type === "arrow" || selectedAnnotation.type === "rect" || selectedAnnotation.type === "circle")
         ? selectedAnnotation
         : null;
     }
@@ -479,6 +487,8 @@
       if (target.item.type === "number") return "数字";
       if (target.item.type === "line") return "线条";
       if (target.item.type === "arrow") return "箭头";
+      if (target.item.type === "rect") return "矩形";
+      if (target.item.type === "circle") return "圆形";
       return "元素";
     }
 
@@ -575,6 +585,10 @@
       arrowCurrent = null;
       lineStart = null;
       lineCurrent = null;
+      rectStart = null;
+      rectCurrent = null;
+      circleStart = null;
+      circleCurrent = null;
     }
 
     function updateButtons() {
@@ -586,6 +600,8 @@
       btnMosaic.disabled = !hasImage;
       btnArrow.disabled = !hasImage;
       btnLine.disabled = !hasImage;
+      btnRect.disabled = !hasImage;
+      btnCircle.disabled = !hasImage;
       btnNumber.disabled = !hasImage;
       btnText.disabled = !hasImage;
       strokeColorInput.disabled = !hasImage;
@@ -596,6 +612,8 @@
       btnMosaic.classList.toggle("active", hasImage && currentTool === "mosaic");
       btnArrow.classList.toggle("active", hasImage && currentTool === "arrow");
       btnLine.classList.toggle("active", hasImage && currentTool === "line");
+      btnRect.classList.toggle("active", hasImage && currentTool === "rect");
+      btnCircle.classList.toggle("active", hasImage && currentTool === "circle");
       btnNumber.classList.toggle("active", hasImage && currentTool === "number");
       btnText.classList.toggle("active", hasImage && currentTool === "text");
 
@@ -612,6 +630,8 @@
       const showStroke = hasImage && (
         currentTool === "line" ||
         currentTool === "arrow" ||
+        currentTool === "rect" ||
+        currentTool === "circle" ||
         currentTool === "text" ||
         currentTool === "number" ||
         !!getSelectedStrokeAnnotation()
@@ -688,7 +708,7 @@
         parts.push(`<span>将删除总高度: ${totalSelectedHeight(ranges)}px</span>`);
       }
       parts.push(`<span>缩放: ${(zoomScale * 100).toFixed(0)}%</span>`);
-      if (currentTool === "arrow" || currentTool === "line") {
+      if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
         parts.push(`<span>线条: ${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}</span>`);
       }
       if (selecting) {
@@ -704,6 +724,14 @@
         } else if (dragType === "line" && lineStart && lineCurrent) {
           const lineEnd = getPreviewLineEnd();
           parts.push(`<span>线段长度: ${Math.round(Math.hypot(lineEnd.x - lineStart.x, lineEnd.y - lineStart.y))}px</span>`);
+        } else if (dragType === "rect" && rectStart && rectCurrent) {
+          const rect = normalizeRect(rectStart, rectCurrent);
+          if (rect) {
+            parts.push(`<span>矩形尺寸: ${rect.w} x ${rect.h}px</span>`);
+          }
+        } else if (dragType === "circle" && circleStart && circleCurrent) {
+          const radius = Math.round(Math.hypot(circleCurrent.x - circleStart.x, circleCurrent.y - circleStart.y));
+          parts.push(`<span>圆半径: ${radius}px</span>`);
         }
       }
       const selectedElement = getSelectedElement();
@@ -721,6 +749,8 @@
       if (tool === "mosaic") return "矩形马赛克";
       if (tool === "arrow") return "画箭头";
       if (tool === "line") return "划线";
+      if (tool === "rect") return "矩形";
+      if (tool === "circle") return "圆形";
       if (tool === "number") return "数字标注";
       if (tool === "text") return "文字标注";
       return "未知";
@@ -952,6 +982,14 @@
           draggingAnnotation.to.x += dx;
           draggingAnnotation.to.y += dy;
           dragAnnotationOffset = { x: p.x, y: p.y };
+        } else if (draggingAnnotation.type === "rect" || draggingAnnotation.type === "circle") {
+          const dx = p.x - dragAnnotationOffset.x;
+          const dy = p.y - dragAnnotationOffset.y;
+          draggingAnnotation.from.x += dx;
+          draggingAnnotation.from.y += dy;
+          draggingAnnotation.to.x += dx;
+          draggingAnnotation.to.y += dy;
+          dragAnnotationOffset = { x: p.x, y: p.y };
         }
         return true;
       }
@@ -1033,6 +1071,18 @@
           width: getStrokeWidth()
         });
       }
+      if (selecting && dragType === "rect" && rectStart && rectCurrent) {
+        drawRect(ctx, rectStart, getPreviewRectEnd(rectStart, rectCurrent, isShiftPressed), {
+          color: getStrokeColor(),
+          width: getStrokeWidth()
+        });
+      }
+      if (selecting && dragType === "circle" && circleStart && circleCurrent) {
+        drawCircle(ctx, circleStart, getPreviewCircleEnd(circleStart, circleCurrent, isShiftPressed), {
+          color: getStrokeColor(),
+          width: getStrokeWidth()
+        });
+      }
     }
 
     function drawLine(pCtx, from, to, style = {}) {
@@ -1048,7 +1098,53 @@
       pCtx.stroke();
       pCtx.restore();
     }
+    function drawRect(pCtx, from, to, style = {}) {
+      const { color, width } = getAnnotationStroke(style);
+      pCtx.save();
+      pCtx.strokeStyle = color;
+      pCtx.lineWidth = width;
+      pCtx.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
+      pCtx.restore();
+    }
+    function drawCircle(pCtx, from, to, style = {}) {
+      const rx = Math.abs(to.x - from.x);
+      const ry = Math.abs(to.y - from.y);
+      if (rx < 0.5 && ry < 0.5) return;
+      const { color, width } = getAnnotationStroke(style);
+      pCtx.save();
+      pCtx.strokeStyle = color;
+      pCtx.lineWidth = width;
+      pCtx.beginPath();
+      if (pCtx.ellipse) {
+        pCtx.ellipse(from.x, from.y, rx, ry, 0, 0, Math.PI * 2);
+      } else {
+        pCtx.arc(from.x, from.y, Math.max(rx, ry), 0, Math.PI * 2);
+      }
+      pCtx.stroke();
+      pCtx.restore();
+    }
 
+    function getPreviewRectEnd(start, current, shift) {
+      if (!shift) return current;
+      const dx = current.x - start.x;
+      const dy = current.y - start.y;
+      const side = Math.max(Math.abs(dx), Math.abs(dy));
+      return {
+        x: start.x + Math.sign(dx || 1) * side,
+        y: start.y + Math.sign(dy || 1) * side
+      };
+    }
+
+    function getPreviewCircleEnd(start, current, shift) {
+      if (!shift) return current;
+      const dx = current.x - start.x;
+      const dy = current.y - start.y;
+      const radius = Math.hypot(dx, dy);
+      return {
+        x: start.x + radius,
+        y: start.y + radius
+      };
+    }
     function drawArrow(pCtx, from, to, style = {}) {
       const dist = Math.hypot(to.x - from.x, to.y - from.y);
       if (dist < 5) return;
@@ -1133,6 +1229,26 @@
       });
     }
 
+    function drawRectOnImage(from, to) {
+      annotations.push({
+        type: "rect",
+        from: { ...from },
+        to: { ...to },
+        color: getStrokeColor(),
+        width: getStrokeWidth()
+      });
+    }
+
+    function drawCircleOnImage(from, to) {
+      annotations.push({
+        type: "circle",
+        from: { ...from },
+        to: { ...to },
+        color: getStrokeColor(),
+        width: getStrokeWidth()
+      });
+    }
+
     function drawNumberOnImage(pos, num) {
       const baseSize = 14;
       const sizeMultiplier = 2;
@@ -1163,6 +1279,10 @@
           drawArrow(tctx, ann.from, ann.to, ann);
         } else if (ann.type === "line") {
           drawLine(tctx, ann.from, ann.to, ann);
+        } else if (ann.type === "rect") {
+          drawRect(tctx, ann.from, ann.to, ann);
+        } else if (ann.type === "circle") {
+          drawCircle(tctx, ann.from, ann.to, ann);
         } else if (ann.type === "number") {
           drawNumber(tctx, ann.pos, ann.val, ann.color, ann.size);
         }
@@ -1192,6 +1312,10 @@
           drawArrow(ctx, ann.from, ann.to, ann);
         } else if (ann.type === "line") {
           drawLine(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "rect") {
+          drawRect(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "circle") {
+          drawCircle(ctx, ann.from, ann.to, ann);
         } else if (ann.type === "number") {
           drawNumber(ctx, ann.pos, ann.val, ann.color, ann.size);
         } else if (ann.type === "text") {
@@ -1221,6 +1345,23 @@
             ctx.beginPath();
             ctx.moveTo(ann.from.x, ann.from.y);
             ctx.lineTo(ann.to.x, ann.to.y);
+            ctx.stroke();
+          } else if (ann.type === "rect") {
+            const rect = normalizeRect(ann.from, ann.to);
+            if (rect) {
+              ctx.lineWidth = getAnnotationStroke(ann).width + 6;
+              ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+            }
+          } else if (ann.type === "circle") {
+            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
+            ctx.beginPath();
+            const rx = Math.abs(ann.to.x - ann.from.x);
+            const ry = Math.abs(ann.to.y - ann.from.y);
+            if (ctx.ellipse) {
+              ctx.ellipse(ann.from.x, ann.from.y, rx, ry, 0, 0, Math.PI * 2);
+            } else {
+              ctx.arc(ann.from.x, ann.from.y, Math.max(rx, ry), 0, Math.PI * 2);
+            }
             ctx.stroke();
           } else if (ann.type === "text") {
             ctx.font = `bold ${ann.size}px "Microsoft YaHei", sans-serif`;
@@ -1255,9 +1396,37 @@
         } else if (ann.type === "arrow" || ann.type === "line") {
           const threshold = Math.max(10, getAnnotationStroke(ann).width + 6);
           if (isPointNearSegment(p, ann.from, ann.to, threshold)) return ann;
+        } else if (ann.type === "rect") {
+          const rect = normalizeRect(ann.from, ann.to);
+          if (rect) {
+            const threshold = Math.max(10, getAnnotationStroke(ann).width + 6);
+            // 检查是否在矩形边框上
+            if (isPointNearRectBorder(p, rect, threshold)) return ann;
+          }
+        } else if (ann.type === "circle") {
+          const rx = Math.abs(ann.to.x - ann.from.x);
+          const ry = Math.abs(ann.to.y - ann.from.y);
+          const threshold = Math.max(10, getAnnotationStroke(ann).width + 6);
+          if (rx < 1 || ry < 1) {
+            if (Math.hypot(p.x - ann.from.x, p.y - ann.from.y) < threshold) return ann;
+          } else {
+            const dx = p.x - ann.from.x;
+            const dy = p.y - ann.from.y;
+            const distNorm = Math.sqrt((dx / rx) ** 2 + (dy / ry) ** 2);
+            const avgR = (rx + ry) / 2;
+            if (Math.abs(distNorm - 1) * avgR < threshold) return ann;
+          }
         }
       }
       return null;
+    }
+    function isPointNearRectBorder(p, rect, threshold) {
+      const { x, y, w, h } = rect;
+      const onTop = Math.abs(p.y - y) < threshold && p.x >= x - threshold && p.x <= x + w + threshold;
+      const onBottom = Math.abs(p.y - (y + h)) < threshold && p.x >= x - threshold && p.x <= x + w + threshold;
+      const onLeft = Math.abs(p.x - x) < threshold && p.y >= y - threshold && p.y <= y + h + threshold;
+      const onRight = Math.abs(p.x - (x + w)) < threshold && p.y >= y - threshold && p.y <= y + h + threshold;
+      return onTop || onBottom || onLeft || onRight;
     }
     function isPointNearSegment(p, a, b, threshold) {
       const l2 = Math.hypot(a.x - b.x, a.y - b.y) ** 2;
@@ -1390,6 +1559,12 @@
       } else if (currentTool === "line") {
         lineStart = p;
         lineCurrent = p;
+      } else if (currentTool === "rect") {
+        rectStart = p;
+        rectCurrent = p;
+      } else if (currentTool === "circle") {
+        circleStart = p;
+        circleCurrent = p;
       } else if (currentTool === "number") {
         pushUndoState();
         const numVal = parseInt(numberAnnotationInput.value) || numberCounter;
@@ -1442,6 +1617,10 @@
         arrowCurrent = p;
       } else if (dragType === "line") {
         lineCurrent = p;
+      } else if (dragType === "rect") {
+        rectCurrent = p;
+      } else if (dragType === "circle") {
+        circleCurrent = p;
       } else {
         dragCurrentY = p.y;
       }
@@ -1494,6 +1673,30 @@
         }
         lineStart = null;
         lineCurrent = null;
+      } else if (dragType === "rect") {
+        selecting = false;
+        if (rectStart && rectCurrent) {
+          const finalTo = getPreviewRectEnd(rectStart, rectCurrent, e.shiftKey);
+          if (Math.abs(finalTo.x - rectStart.x) > 2 || Math.abs(finalTo.y - rectStart.y) > 2) {
+            pushUndoState();
+            drawRectOnImage(rectStart, finalTo);
+            setStatus("已添加矩形");
+          }
+        }
+        rectStart = null;
+        rectCurrent = null;
+      } else if (dragType === "circle") {
+        selecting = false;
+        if (circleStart && circleCurrent) {
+          const finalTo = getPreviewCircleEnd(circleStart, circleCurrent, e.shiftKey);
+          if (Math.abs(finalTo.x - circleStart.x) > 2 || Math.abs(finalTo.y - circleStart.y) > 2) {
+            pushUndoState();
+            drawCircleOnImage(circleStart, finalTo);
+            setStatus("已添加圆形/椭圆");
+          }
+        }
+        circleStart = null;
+        circleCurrent = null;
       } else {
         const isPlainClick = dragMode === "replace"
           && dragStartY !== null
@@ -1534,12 +1737,18 @@
       arrowCurrent = null;
       lineStart = null;
       lineCurrent = null;
+      rectStart = null;
+      rectCurrent = null;
+      circleStart = null;
+      circleCurrent = null;
 
       const names = {
         range: "删除区间选择：拖拽选择要删除的垂直区间，也可选择和移动已添加元素",
         mosaic: `马赛克：拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
         arrow: `画箭头：拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
         line: `划线：拖拽绘制直线，按 Shift 锁定水平，可调整颜色和粗细（${getStrokeWidth()}px）`,
+        rect: `矩形：拖拽绘制矩形，可调整颜色和粗细（${getStrokeWidth()}px）`,
+        circle: `圆形：拖拽绘制圆形，以起点为中心，可调整颜色和粗细（${getStrokeWidth()}px）`,
         number: `数字标注：点击图片放置数字，可在上方数字框中重置和修改`,
         text: `文字标注：在上方输入框修改文字和颜色大小，点击图片放置`
       };
@@ -1553,6 +1762,8 @@
     btnMosaic.addEventListener("click", () => setTool("mosaic"));
     btnArrow.addEventListener("click", () => setTool("arrow"));
     btnLine.addEventListener("click", () => setTool("line"));
+    btnRect.addEventListener("click", () => setTool("rect"));
+    btnCircle.addEventListener("click", () => setTool("circle"));
     btnNumber.addEventListener("click", () => setTool("number"));
     btnText.addEventListener("click", () => setTool("text"));
     btnZoomReset.addEventListener("click", () => {
@@ -1622,7 +1833,7 @@
       for (const ann of annotations) {
         if (ann.type === "number" || ann.type === "text") {
           ann.pos.y = calculateNewY(ann.pos.y, ranges);
-        } else if (ann.type === "arrow" || ann.type === "line") {
+        } else if (ann.type === "arrow" || ann.type === "line" || ann.type === "rect" || ann.type === "circle") {
           ann.from.y = calculateNewY(ann.from.y, ranges);
           ann.to.y = calculateNewY(ann.to.y, ranges);
         }
@@ -1733,6 +1944,16 @@
           setTool("line");
           return;
         }
+        if (key === "r") {
+          event.preventDefault();
+          setTool("rect");
+          return;
+        }
+        if (key === "c") {
+          event.preventDefault();
+          setTool("circle");
+          return;
+        }
         if (key === "n") {
           event.preventDefault();
           setTool("number");
@@ -1793,7 +2014,7 @@
     strokeColorInput.addEventListener("input", () => {
       if (!imageData) return;
       render();
-      if (currentTool === "arrow" || currentTool === "line") {
+      if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
         setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
       }
     });
@@ -1802,7 +2023,7 @@
       syncStrokeControls();
       if (!imageData) return;
       render();
-      if (currentTool === "arrow" || currentTool === "line") {
+      if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
         setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
       }
     });
