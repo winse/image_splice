@@ -305,6 +305,13 @@
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
         <button id="btnZoomReset" title="缩放还原 1:1" disabled>比例还原</button>
+        <button id="btnRotateL" title="逆时针旋转 90°" disabled>左转</button>
+        <button id="btnRotateR" title="顺时针旋转 90°" disabled>右转</button>
+        <button id="btnFlipH" title="水平翻转" disabled>水平翻转</button>
+        <button id="btnFlipV" title="垂直翻转" disabled>垂直翻转</button>
+      </div>
+      <div class="tool-divider" aria-hidden="true"></div>
+      <div class="tool-group">
         <button id="btnReset" title="恢复到初始图片" disabled>内容重置</button>
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
@@ -371,6 +378,10 @@
     const btnNumber = document.getElementById("btnNumber");
     const btnText = document.getElementById("btnText");
     const btnZoomReset = document.getElementById("btnZoomReset");
+    const btnRotateL = document.getElementById("btnRotateL");
+    const btnRotateR = document.getElementById("btnRotateR");
+    const btnFlipH = document.getElementById("btnFlipH");
+    const btnFlipV = document.getElementById("btnFlipV");
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
     const btnQuickDelete = document.getElementById("btnQuickDelete");
@@ -621,6 +632,10 @@
       btnText.classList.toggle("active", hasImage && currentTool === "text");
 
       btnZoomReset.disabled = !hasImage;
+      btnRotateL.disabled = !hasImage;
+      btnRotateR.disabled = !hasImage;
+      btnFlipH.disabled = !hasImage;
+      btnFlipV.disabled = !hasImage;
       btnReset.disabled = !hasImage;
       btnSave.disabled = !hasImage;
 
@@ -2128,6 +2143,75 @@
         numberCounter = val;
       }
     });
+
+    function rotateImageData(src, direction) {
+      const { width, height, data } = src;
+      const newW = direction === 'cw' || direction === 'ccw' ? height : width;
+      const newH = direction === 'cw' || direction === 'ccw' ? width : height;
+      const dst = new ImageData(newW, newH);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const srcIdx = (y * width + x) * 4;
+          let dstX, dstY;
+          if (direction === 'cw') {
+            dstX = height - 1 - y;
+            dstY = x;
+          } else if (direction === 'ccw') {
+            dstX = y;
+            dstY = width - 1 - x;
+          } else if (direction === 'flipH') {
+            dstX = width - 1 - x;
+            dstY = y;
+          } else {
+            dstX = x;
+            dstY = height - 1 - y;
+          }
+          const dstIdx = (dstY * newW + dstX) * 4;
+          dst.data[dstIdx] = data[srcIdx];
+          dst.data[dstIdx + 1] = data[srcIdx + 1];
+          dst.data[dstIdx + 2] = data[srcIdx + 2];
+          dst.data[dstIdx + 3] = data[srcIdx + 3];
+        }
+      }
+      return dst;
+    }
+
+    function doRotate(direction) {
+      if (!imageData) return;
+      pushUndoState();
+      commitPastedImagesToBase();
+      imageData = rotateImageData(imageData, direction);
+      for (const layer of pastedImages) {
+        if (direction === 'cw') {
+          const oldX = layer.x;
+          layer.x = canvas.height - layer.y - layer.height;
+          layer.y = oldX;
+          const oldW = layer.width;
+          layer.width = layer.height;
+          layer.height = oldW;
+        } else if (direction === 'ccw') {
+          const oldX = layer.x;
+          layer.x = layer.y;
+          layer.y = canvas.width - layer.x - layer.width;
+          const oldW = layer.width;
+          layer.width = layer.height;
+          layer.height = oldW;
+        } else if (direction === 'flipH') {
+          layer.x = canvas.width - layer.x - layer.width;
+        } else {
+          layer.y = canvas.height - layer.y - layer.height;
+        }
+      }
+      zoomScale = 1;
+      render();
+      const names = { cw: '顺时针', ccw: '逆时针', flipH: '水平', flipV: '垂直' };
+      setStatus(`图片已${names[direction]}翻转`);
+    }
+
+    btnRotateL.addEventListener("click", () => doRotate('ccw'));
+    btnRotateR.addEventListener("click", () => doRotate('cw'));
+    btnFlipH.addEventListener("click", () => doRotate('flipH'));
+    btnFlipV.addEventListener("click", () => doRotate('flipV'));
 
     syncStrokeControls();
     setStatus("等待粘贴图片...");
