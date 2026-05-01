@@ -1949,6 +1949,22 @@
           nctx.drawImage(oldCanvas, 0, srcY, canvas.width, keepH, 0, dstY, canvas.width, keepH);
           dstY += keepH;
         }
+        // 自适应缝隙颜色：取缝隙上下边缘的像素均值
+        if (ranges.length === 1) {
+          const oldCtx = oldCanvas.getContext("2d");
+          const topPixels = oldCtx.getImageData(0, Math.max(0, r.y1 - 1), canvas.width, 1).data;
+          const botPixels = oldCtx.getImageData(0, Math.min(canvas.height - 1, r.y1), canvas.width, 1).data;
+          let tr = 0, tg = 0, tb = 0;
+          let br = 0, bg = 0, bb = 0;
+          const step = Math.max(1, Math.floor(canvas.width / 100));
+          for (let i = 0; i < canvas.width; i += step) {
+            const ti = i * 4;
+            tr += topPixels[ti]; tg += topPixels[ti + 1]; tb += topPixels[ti + 2];
+            br += botPixels[ti]; bg += botPixels[ti + 1]; bb += botPixels[ti + 2];
+          }
+          const cnt = Math.floor(canvas.width / step);
+          nctx.fillStyle = `rgb(${Math.round((tr + br) / 2 / cnt)},${Math.round((tg + bg) / 2 / cnt)},${Math.round((tb + bb) / 2 / cnt)})`;
+        }
         nctx.fillRect(0, dstY, canvas.width, CUT_GAP_PX);
         dstY += CUT_GAP_PX;
         srcY = r.y2;
