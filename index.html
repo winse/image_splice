@@ -1085,43 +1085,42 @@
       }
     }
 
-    function drawLine(pCtx, from, to, style = {}) {
+    function drawShape(pCtx, type, from, to, style = {}) {
       const { color, width } = getAnnotationStroke(style);
       pCtx.save();
       pCtx.strokeStyle = color;
       pCtx.lineWidth = width;
-      pCtx.lineCap = "round";
-      pCtx.lineJoin = "round";
+      pCtx.lineCap = 'round';
+      pCtx.lineJoin = 'round';
       pCtx.beginPath();
-      pCtx.moveTo(from.x, from.y);
-      pCtx.lineTo(to.x, to.y);
-      pCtx.stroke();
+      if (type === 'line' || type === 'rect') {
+        pCtx.moveTo(from.x, from.y);
+        pCtx.lineTo(to.x, to.y);
+        pCtx.stroke();
+      } else if (type === 'circle') {
+        const rx = Math.abs(to.x - from.x);
+        const ry = Math.abs(to.y - from.y);
+        if (rx < 0.5 && ry < 0.5) {
+          pCtx.restore();
+          return;
+        }
+        if (pCtx.ellipse) {
+          pCtx.ellipse(from.x, from.y, rx, ry, 0, 0, Math.PI * 2);
+        } else {
+          pCtx.arc(from.x, from.y, Math.max(rx, ry), 0, Math.PI * 2);
+        }
+        pCtx.stroke();
+      }
       pCtx.restore();
+    }
+    function drawLine(pCtx, from, to, style = {}) {
+      drawShape(pCtx, 'line', from, to, style);
     }
     function drawRect(pCtx, from, to, style = {}) {
-      const { color, width } = getAnnotationStroke(style);
-      pCtx.save();
-      pCtx.strokeStyle = color;
-      pCtx.lineWidth = width;
-      pCtx.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
-      pCtx.restore();
+      drawShape(pCtx, 'rect', from, to, style);
     }
     function drawCircle(pCtx, from, to, style = {}) {
-      const rx = Math.abs(to.x - from.x);
-      const ry = Math.abs(to.y - from.y);
-      if (rx < 0.5 && ry < 0.5) return;
-      const { color, width } = getAnnotationStroke(style);
-      pCtx.save();
-      pCtx.strokeStyle = color;
-      pCtx.lineWidth = width;
-      pCtx.beginPath();
-      if (pCtx.ellipse) {
-        pCtx.ellipse(from.x, from.y, rx, ry, 0, 0, Math.PI * 2);
-      } else {
-        pCtx.arc(from.x, from.y, Math.max(rx, ry), 0, Math.PI * 2);
-      }
-      pCtx.stroke();
-      pCtx.restore();
+      drawShape(pCtx, 'circle', from, to, style);
     }
 
     function getPreviewRectEnd(start, current, shift) {
