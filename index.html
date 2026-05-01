@@ -358,6 +358,10 @@
           <div class="tool-divider" aria-hidden="true"></div>
         </div>
         <button id="btnQuickDelete" class="danger" style="display: none; padding: 4px 10px; font-weight: bold;">删除 (Del)</button>
+        <label id="skipDeleteConfirmLabel" style="display: none; font-size: 13px; color: #536679; user-select: none; cursor: pointer;">
+          <input id="skipDeleteConfirm" type="checkbox" style="margin-right: 4px;" />
+          不再提示
+        </label>
         <span id="status" class="status" aria-live="polite">等待粘贴图片...</span>
       </div>
     </section>
@@ -397,6 +401,7 @@
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
     const btnQuickDelete = document.getElementById("btnQuickDelete");
+    const skipDeleteConfirm = document.getElementById("skipDeleteConfirm");
     const strokeColorInput = document.getElementById("strokeColor");
     const strokeWidthInput = document.getElementById("strokeWidth");
     const strokeWidthValue = document.getElementById("strokeWidthValue");
@@ -661,8 +666,10 @@
 
       if (hasImage && (getSelectedElement() || hasSelection())) {
         btnQuickDelete.style.display = "inline-block";
+        document.getElementById("skipDeleteConfirmLabel").style.display = "inline";
       } else {
         btnQuickDelete.style.display = "none";
+        document.getElementById("skipDeleteConfirmLabel").style.display = "none";
       }
 
       const showStroke = hasImage && (
@@ -1912,7 +1919,13 @@
         setStatus("选中高度无效，无法删除整个图片。");
         return;
       }
+      if (removed > 200 && !skipDeleteConfirm.checked) {
+        if (!confirm(`确定要删除 ${removed}px（${ranges.length} 段）吗？此操作可撤销。`)) {
+          return;
+        }
+      }
       pushUndoState();
+      commitPastedImagesToBase();
 
       const oldCanvas = document.createElement("canvas");
       oldCanvas.width = canvas.width;
@@ -1989,6 +2002,7 @@
 
     btnReset.addEventListener("click", () => {
       if (!originalData) return;
+      if (!skipDeleteConfirm.checked && !confirm("确定要恢复到初始图片？所有未保存的更改将丢失。")) return;
       pushUndoState();
       applyImageData({
         data: originalData,
