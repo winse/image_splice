@@ -1292,15 +1292,8 @@
       return tempCanvas.toDataURL("image/png");
     }
 
-    function render() {
-      if (!imageData) {
-        canvas.hidden = true;
-        empty.hidden = false;
-        return;
-      }
-      canvas.hidden = false;
-      empty.hidden = true;
-      applyCanvasZoom();
+    function renderBaseImage() {
+      if (!imageData) return;
       ctx.putImageData(imageData, 0, 0);
       for (const layer of pastedImages) {
         const source = getPastedImageSource(layer);
@@ -1308,7 +1301,11 @@
           ctx.drawImage(source, layer.x, layer.y, layer.width, layer.height);
         }
       }
+    }
 
+    function renderAnnotationsOnly() {
+      if (!imageData) return;
+      renderBaseImage();
       for (const ann of annotations) {
         if (ann.type === "arrow") {
           drawArrow(ctx, ann.from, ann.to, ann);
@@ -1324,8 +1321,6 @@
           drawText(ctx, ann.pos, ann.val, ann.color, ann.size);
         }
       }
-
-      // 最后统一绘制选中状态，确保在高层不被覆盖
       for (const layer of pastedImages) {
         if (isSelectedElement("pastedImage", layer)) {
           drawPastedImageSelection(layer);
@@ -1334,7 +1329,7 @@
       for (const ann of annotations) {
         if (isSelectedElement("annotation", ann)) {
           ctx.save();
-          ctx.strokeStyle = "rgba(0, 120, 215, 0.9)"; // 稍微加深选中边框颜色
+          ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
           if (ann.type === "number") {
             const size = ann.size || NUMBER_SIZE;
             ctx.lineWidth = 4;
@@ -1376,7 +1371,85 @@
           ctx.restore();
         }
       }
+      drawSelectionOverlay();
+      updateMetrics();
+    }
 
+    function render() {
+      if (!imageData) {
+        canvas.hidden = true;
+        empty.hidden = false;
+        return;
+      }
+      canvas.hidden = false;
+      empty.hidden = true;
+      applyCanvasZoom();
+      renderBaseImage();
+      for (const ann of annotations) {
+        if (ann.type === "arrow") {
+          drawArrow(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "line") {
+          drawLine(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "rect") {
+          drawRect(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "circle") {
+          drawCircle(ctx, ann.from, ann.to, ann);
+        } else if (ann.type === "number") {
+          drawNumber(ctx, ann.pos, ann.val, ann.color, ann.size);
+        } else if (ann.type === "text") {
+          drawText(ctx, ann.pos, ann.val, ann.color, ann.size);
+        }
+      }
+      for (const layer of pastedImages) {
+        if (isSelectedElement("pastedImage", layer)) {
+          drawPastedImageSelection(layer);
+        }
+      }
+      for (const ann of annotations) {
+        if (isSelectedElement("annotation", ann)) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
+          if (ann.type === "number") {
+            const size = ann.size || NUMBER_SIZE;
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(ann.pos.x, ann.pos.y, size * 0.9, 0, Math.PI * 2);
+            ctx.stroke();
+          } else if (ann.type === "arrow" || ann.type === "line") {
+            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(ann.from.x, ann.from.y);
+            ctx.lineTo(ann.to.x, ann.to.y);
+            ctx.stroke();
+          } else if (ann.type === "rect") {
+            const rect = normalizeRect(ann.from, ann.to);
+            if (rect) {
+              ctx.lineWidth = getAnnotationStroke(ann).width + 6;
+              ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+            }
+          } else if (ann.type === "circle") {
+            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
+            ctx.beginPath();
+            const rx = Math.abs(ann.to.x - ann.from.x);
+            const ry = Math.abs(ann.to.y - ann.from.y);
+            if (ctx.ellipse) {
+              ctx.ellipse(ann.from.x, ann.from.y, rx, ry, 0, 0, Math.PI * 2);
+            } else {
+              ctx.arc(ann.from.x, ann.from.y, Math.max(rx, ry), 0, Math.PI * 2);
+            }
+            ctx.stroke();
+          } else if (ann.type === "text") {
+            ctx.font = `bold ${ann.size}px "Microsoft YaHei", sans-serif`;
+            const metrics = ctx.measureText(ann.val);
+            const w = metrics.width + 16;
+            const h = ann.size + 16;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(ann.pos.x - w / 2, ann.pos.y - h / 2, w, h);
+          }
+          ctx.restore();
+        }
+      }
       drawSelectionOverlay();
       updateButtons();
       updateMetrics();
@@ -1629,7 +1702,7 @@
       const p = getCanvasPoint(e);
 
       if (moveDraggingElement(p)) {
-        render();
+        renderAnnotationsOnly();
         return;
       }
 
@@ -2036,7 +2109,6 @@
 
     strokeColorInput.addEventListener("input", () => {
       if (!imageData) return;
-      render();
       if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
         setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
       }
@@ -2045,7 +2117,6 @@
     strokeWidthInput.addEventListener("input", () => {
       syncStrokeControls();
       if (!imageData) return;
-      render();
       if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
         setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
       }
