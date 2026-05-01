@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 
 <head>
@@ -317,14 +317,14 @@
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
         <button id="btnZoomReset" title="缩放还原 1:1" disabled>比例还原</button>
-        <button id="btnRotateL" title="逆时针旋转 90°" disabled>左转</button>
-        <button id="btnRotateR" title="顺时针旋转 90°" disabled>右转</button>
-        <button id="btnFlipH" title="水平翻转" disabled>水平翻转</button>
-        <button id="btnFlipV" title="垂直翻转" disabled>垂直翻转</button>
+        <button id="btnRotateL" title="逆时针旋转 90°" disabled>左</button>
+        <button id="btnRotateR" title="顺时针旋转 90°" disabled>右</button>
+        <button id="btnFlipH" title="水平翻转" disabled>水平</button>
+        <button id="btnFlipV" title="垂直翻转" disabled>垂直</button>
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
-        <button id="btnReset" title="恢复到初始图片" disabled>内容重置</button>
+        <button id="btnReset" title="恢复到初始图片" disabled>重置</button>
       </div>
       <div class="tool-divider" aria-hidden="true"></div>
       <div class="tool-group">
@@ -1171,11 +1171,13 @@
       pCtx.lineWidth = width;
       pCtx.lineCap = 'round';
       pCtx.lineJoin = 'round';
-      pCtx.beginPath();
-      if (type === 'line' || type === 'rect') {
+      if (type === 'line') {
+        pCtx.beginPath();
         pCtx.moveTo(from.x, from.y);
         pCtx.lineTo(to.x, to.y);
         pCtx.stroke();
+      } else if (type === 'rect') {
+        pCtx.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
       } else if (type === 'circle') {
         const rx = Math.abs(to.x - from.x);
         const ry = Math.abs(to.y - from.y);
@@ -1183,6 +1185,7 @@
           pCtx.restore();
           return;
         }
+        pCtx.beginPath();
         if (pCtx.ellipse) {
           pCtx.ellipse(from.x, from.y, rx, ry, 0, 0, Math.PI * 2);
         } else {
