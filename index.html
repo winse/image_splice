@@ -441,7 +441,10 @@
     }
 
     function getStrokeWidth() {
-      return Math.max(1, Number(strokeWidthInput?.value) || DEFAULT_STROKE_WIDTH);
+      const val = parseInt(strokeWidthInput?.value, 10);
+      if (isNaN(val) || val < 1) return DEFAULT_STROKE_WIDTH;
+      if (val > 64) return 64;
+      return val;
     }
 
     function syncStrokeControls() {
@@ -1465,6 +1468,27 @@
           const url = URL.createObjectURL(file);
           const img = new Image();
           img.onload = () => {
+            const MAX_PIXELS = 4096 * 4096;
+            const pixels = img.naturalWidth * img.naturalHeight;
+            if (pixels > MAX_PIXELS) {
+              const scale = Math.sqrt(MAX_PIXELS / pixels);
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = Math.round(img.naturalWidth * scale);
+              tempCanvas.height = Math.round(img.naturalHeight * scale);
+              const tctx = tempCanvas.getContext('2d');
+              tctx.drawImage(img, 0, 0, tempCanvas.width, tempCanvas.height);
+              const dataUrl = tempCanvas.toDataURL();
+              img.src = dataUrl;
+              img.onload = () => {
+                if (imageData) {
+                  appendImageToCanvas(img);
+                } else {
+                  loadImageToCanvas(img);
+                }
+                setStatus(`图片已自动缩放至 ${img.naturalWidth}x${img.naturalHeight}（超过最大 16.8Mpx）`);
+              };
+              return;
+            }
             if (imageData) {
               appendImageToCanvas(img);
             } else {
