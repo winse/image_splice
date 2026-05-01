@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
 
 <head>
@@ -89,19 +89,33 @@
 
     .toolbar {
       display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      gap: 12px;
       align-items: center;
       position: sticky;
       top: 8px;
       z-index: 30;
       box-shadow: 0 6px 16px rgba(27, 42, 58, 0.1);
+      scrollbar-width: thin;
+      scrollbar-color: var(--line) transparent;
+      padding: 8px 16px;
+    }
+
+    .toolbar::-webkit-scrollbar {
+      height: 4px;
+    }
+
+    .toolbar::-webkit-scrollbar-thumb {
+      background-color: var(--line);
+      border-radius: 4px;
     }
 
     .tool-group {
       display: inline-flex;
       align-items: center;
       gap: 8px;
+      flex-shrink: 0;
     }
 
     .tool-config {
@@ -110,6 +124,7 @@
       gap: 6px;
       color: #536679;
       font-size: 13px;
+      flex-shrink: 0;
     }
 
     .tool-config label {
@@ -142,6 +157,7 @@
       height: 24px;
       background: #c9d7e6;
       margin: 0 2px;
+      flex-shrink: 0;
     }
 
     button {
@@ -152,6 +168,7 @@
       border-radius: 8px;
       cursor: pointer;
       font-size: 14px;
+      flex-shrink: 0;
     }
 
     button.primary {
@@ -172,8 +189,51 @@
     }
 
     .status {
-      font-size: 14px;
-      color: #3f5165;
+      display: none;
+    }
+
+    .toast-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: rgba(240, 249, 255, 0.96);
+      backdrop-filter: blur(12px);
+      color: #0369a1;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.5;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+      border: 1px solid rgba(186, 230, 253, 0.6);
+      animation: toast-in 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
+      pointer-events: auto;
+      max-width: 380px;
+      word-break: break-word;
+      white-space: normal;
+    }
+
+    .toast.out {
+      animation: toast-out 0.3s cubic-bezier(0.6, -0.28, 0.735, 0.045) forwards;
+    }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateX(20px) scale(0.9); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
+    }
+
+    @keyframes toast-out {
+      from { opacity: 1; transform: translateX(0) scale(1); }
+      to { opacity: 0; transform: translateX(20px) scale(0.9); }
     }
 
     .canvas-box {
@@ -358,13 +418,10 @@
           <div class="tool-divider" aria-hidden="true"></div>
         </div>
         <button id="btnQuickDelete" class="danger" style="display: none; padding: 4px 10px; font-weight: bold;">删除 (Del)</button>
-        <label id="skipDeleteConfirmLabel" style="display: none; font-size: 13px; color: #536679; user-select: none; cursor: pointer;">
-          <input id="skipDeleteConfirm" type="checkbox" style="margin-right: 4px;" />
-          不再提示
-        </label>
-        <span id="status" class="status" aria-live="polite">等待粘贴图片...</span>
       </div>
     </section>
+
+    <div id="toastContainer" class="toast-container"></div>
 
     <section class="panel">
       <div id="metrics" class="metric"></div>
@@ -380,7 +437,7 @@
     const ctx = canvas.getContext("2d");
     const canvasBox = document.querySelector(".canvas-box");
     const empty = document.getElementById("empty");
-    const statusEl = document.getElementById("status");
+    const toastContainer = document.getElementById("toastContainer");
     const metricsEl = document.getElementById("metrics");
 
     const btnUndo = document.getElementById("btnUndo");
@@ -401,7 +458,6 @@
     const btnReset = document.getElementById("btnReset");
     const btnSave = document.getElementById("btnSave");
     const btnQuickDelete = document.getElementById("btnQuickDelete");
-    const skipDeleteConfirm = document.getElementById("skipDeleteConfirm");
     const strokeColorInput = document.getElementById("strokeColor");
     const strokeWidthInput = document.getElementById("strokeWidth");
     const strokeWidthValue = document.getElementById("strokeWidthValue");
@@ -460,8 +516,48 @@
     const redoStack = [];
     const pastedImageSourceCache = new Map();
 
+    const TOOL_DESCRIPTIONS = {
+      range: () => "删除区间选择 - 拖拽选择要删除的垂直区间，也可选择和移动已添加元素",
+      mosaic: () => `马赛克 - 拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
+      arrow: () => `画箭头 - 拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
+      line: () => `划线 - 拖拽绘制直线，按 Shift 锁定水平，可调整颜色和粗细（${getStrokeWidth()}px）`,
+      rect: () => `矩形 - 拖拽绘制矩形，可调整颜色和粗细（${getStrokeWidth()}px）`,
+      circle: () => `圆形 - 拖拽绘制圆形/椭圆，以起点为中心，可调整颜色和粗细（${getStrokeWidth()}px）`,
+      number: () => `数字标注 - 点击图片放置数字（当前：${numberCounter}），可在上方数字框中修改`,
+      text: () => `文字标注 - 点击图片放置文字（内容：${textAnnotationInput.value || "文字内容"}）`
+    };
+
     function setStatus(text) {
-      statusEl.textContent = text;
+      if (!text) return;
+      // 避免重复的消息堆积
+      const lastToast = toastContainer.lastElementChild;
+      if (lastToast && lastToast.textContent === text) return;
+
+      // 限制最多显示 2 个气泡，超过时移除最早的一个
+      while (toastContainer.children.length >= 2) {
+        toastContainer.firstElementChild.remove();
+      }
+
+      const toast = document.createElement("div");
+      toast.className = "toast";
+      toast.textContent = text;
+      toastContainer.appendChild(toast);
+
+      const removeToast = () => {
+        toast.classList.add("out");
+        toast.addEventListener("animationend", () => {
+          toast.remove();
+        }, { once: true });
+      };
+
+      // 3秒后移除
+      const timer = setTimeout(removeToast, 3000);
+
+      // 点击也可立即移除
+      toast.onclick = () => {
+        clearTimeout(timer);
+        removeToast();
+      };
     }
 
     function getStrokeColor() {
@@ -666,10 +762,8 @@
 
       if (hasImage && (getSelectedElement() || hasSelection())) {
         btnQuickDelete.style.display = "inline-block";
-        document.getElementById("skipDeleteConfirmLabel").style.display = "inline";
       } else {
         btnQuickDelete.style.display = "none";
-        document.getElementById("skipDeleteConfirmLabel").style.display = "none";
       }
 
       const showStroke = hasImage && (
@@ -753,9 +847,6 @@
         parts.push(`<span>将删除总高度: ${totalSelectedHeight(ranges)}px</span>`);
       }
       parts.push(`<span>缩放: ${(zoomScale * 100).toFixed(0)}%</span>`);
-      if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
-        parts.push(`<span>线条: ${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}</span>`);
-      }
       if (selecting) {
         if (dragType === "range") {
           parts.push(`<span>当前模式: ${modeText(dragMode)}</span>`);
@@ -784,7 +875,8 @@
         parts.push(`<span>已选中: ${getElementLabel(selectedElement)}</span>`);
         parts.push(`<span>${describeSelectedElement(selectedElement)}</span>`);
       }
-      parts.push(`<span>当前工具: ${getToolName(currentTool)}</span>`);
+      const desc = TOOL_DESCRIPTIONS[currentTool] ? TOOL_DESCRIPTIONS[currentTool]() : getToolName(currentTool);
+      parts.push(`<span>当前工具: ${desc}</span>`);
       metricsEl.innerHTML = parts.join("");
     }
 
@@ -1033,10 +1125,19 @@
           const dy = p.y - dragPastedImageOffset.y;
           const origW = draggingPastedImage._origW;
           const origH = draggingPastedImage._origH;
-          const scaleX = Math.max(0.1, (origW + dx) / origW);
-          const scaleY = Math.max(0.1, (origH + dy) / origH);
-          draggingPastedImage.width = Math.round(origW * scaleX);
-          draggingPastedImage.height = Math.round(origH * scaleY);
+
+          let nextW = Math.max(10, Math.round(origW + dx));
+          let nextH = Math.max(10, Math.round(origH + dy));
+
+          if (isShiftPressed) {
+            // 等比例缩放：取变化较大的那个轴的缩放比例
+            const scale = Math.max(nextW / origW, nextH / origH);
+            nextW = Math.round(origW * scale);
+            nextH = Math.round(origH * scale);
+          }
+
+          draggingPastedImage.width = nextW;
+          draggingPastedImage.height = nextH;
         } else {
           const nextPos = clampPastedImagePosition(
             draggingPastedImage,
@@ -1917,18 +2018,11 @@
       circleStart = null;
       circleCurrent = null;
 
-      const names = {
-        range: "删除区间选择：拖拽选择要删除的垂直区间，也可选择和移动已添加元素",
-        mosaic: `马赛克：拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
-        arrow: `画箭头：拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
-        line: `划线：拖拽绘制直线，按 Shift 锁定水平，可调整颜色和粗细（${getStrokeWidth()}px）`,
-        rect: `矩形：拖拽绘制矩形，可调整颜色和粗细（${getStrokeWidth()}px）`,
-        circle: `圆形：拖拽绘制圆形，以起点为中心，可调整颜色和粗细（${getStrokeWidth()}px）`,
-        number: `数字标注：点击图片放置数字，可在上方数字框中重置和修改`,
-        text: `文字标注：在上方输入框修改文字和颜色大小，点击图片放置`
-      };
+      if (tool !== "range") {
+        clearSelection();
+      }
 
-      setStatus(`${names[tool]}`);
+      setStatus(`当前工具已切换为: ${getToolName(tool)}`);
       render();
       updateButtons();
     }
@@ -1956,7 +2050,7 @@
         setStatus("选中高度无效，无法删除整个图片。");
         return;
       }
-      if (removed > 200 && !skipDeleteConfirm.checked) {
+      if (removed > 200) {
         if (!confirm(`确定要删除 ${removed}px（${ranges.length} 段）吗？此操作可撤销。`)) {
           return;
         }
@@ -2055,7 +2149,7 @@
 
     btnReset.addEventListener("click", () => {
       if (!originalData) return;
-      if (!skipDeleteConfirm.checked && !confirm("确定要恢复到初始图片？所有未保存的更改将丢失。")) return;
+      if (!confirm("确定要恢复到初始图片？所有未保存的更改将丢失。")) return;
       pushUndoState();
       applyImageData({
         data: originalData,
