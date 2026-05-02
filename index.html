@@ -2018,10 +2018,12 @@
             s: "ns-resize",
             w: "ew-resize",
             e: "ew-resize",
-            from: "move",
-            to: "move"
+            from: "crosshair",
+            to: "crosshair"
           };
           canvas.style.cursor = cursors[hit.handle] || "default";
+        } else if (hit && hit.kind === "pastedImage" && hit.resize) {
+          canvas.style.cursor = "nwse-resize";
         } else if (hit) {
           canvas.style.cursor = "move";
         } else {
