@@ -507,6 +507,8 @@
     const NUMBER_BG = "#ffffff";
     const NUMBER_SIZE = 24;
     const CLICK_CLEAR_THRESHOLD = 2;
+    const HANDLE_SIZE = 8;
+    const HANDLE_PADDING = 4;
     const ZOOM_MIN = 0.2;
     const ZOOM_MAX = 8;
     const ZOOM_STEP = 0.1;
@@ -596,6 +598,32 @@
     function setSelectedElement(kind, item) {
       selectedAnnotation = kind === "annotation" ? item : null;
       selectedPastedImage = kind === "pastedImage" ? item : null;
+
+      if (item) {
+        if (kind === "pastedImage") {
+          currentTool = "range";
+        } else if (kind === "annotation") {
+          currentTool = item.type;
+          // 加载属性到控制面板
+          if (item.color) strokeColorInput.value = item.color;
+          if (item.width) {
+            strokeWidthInput.value = item.width;
+          } else if (item.size) {
+            // 根据基础字号 14 转换回粗细滑块值
+            let w = 4;
+            if (item.type === "number") w = (item.size - 14) / 2;
+            if (item.type === "text") w = (item.size - 14) / 3;
+            strokeWidthInput.value = Math.max(1, Math.round(w));
+          }
+          syncStrokeControls();
+
+          if (item.type === "text") {
+            textAnnotationInput.value = item.val;
+          } else if (item.type === "number") {
+            numberAnnotationInput.value = item.val;
+          }
+        }
+      }
     }
 
     function isSelectedElement(kind, item) {
@@ -612,6 +640,7 @@
       if (!target) return "";
       if (target.kind === "pastedImage") return "追加图片";
       if (target.item.type === "number") return "数字";
+      if (target.item.type === "text") return "文字";
       if (target.item.type === "line") return "线条";
       if (target.item.type === "arrow") return "箭头";
       if (target.item.type === "rect") return "矩形";
@@ -624,8 +653,9 @@
       if (target.kind === "pastedImage") {
         return `追加图位置: x=${Math.round(target.item.x)}, y=${Math.round(target.item.y)}`;
       }
-      if (target.item.type === "number") {
-        return `数字位置: x=${Math.round(target.item.pos.x)}, y=${Math.round(target.item.pos.y)}`;
+      if (target.item.type === "number" || target.item.type === "text") {
+        const label = target.item.type === "number" ? "数字" : "文字";
+        return `${label}位置: x=${Math.round(target.item.pos.x)}, y=${Math.round(target.item.pos.y)}`;
       }
       return `${getElementLabel(target)}起点: x=${Math.round(target.item.from.x)}, y=${Math.round(target.item.from.y)}`;
     }
@@ -1008,6 +1038,71 @@
       render();
     }
 
+    function getAnnotationBounds(ann) {
+      if (!ann) return null;
+      let minX, minY, maxX, maxY;
+      if (ann.type === "number" || ann.type === "text") {
+        const size = ann.size || (ann.type === "number" ? NUMBER_SIZE : 16);
+        let w = size;
+        let h = size;
+        if (ann.type === "text") {
+          ctx.save();
+          ctx.font = `bold ${size}px "Microsoft YaHei", sans-serif`;
+          const metrics = ctx.measureText(ann.val);
+          w = metrics.width + 16;
+          h = size + 16;
+          ctx.restore();
+        } else {
+          w = size * 1.8;
+          h = size * 1.8;
+        }
+        minX = ann.pos.x - w / 2;
+        maxX = ann.pos.x + w / 2;
+        minY = ann.pos.y - h / 2;
+        maxY = ann.pos.y + h / 2;
+      } else if (ann.type === "circle") {
+        const rx = Math.abs(ann.to.x - ann.from.x);
+        const ry = Math.abs(ann.to.y - ann.from.y);
+        minX = ann.from.x - rx;
+        maxX = ann.from.x + rx;
+        minY = ann.from.y - ry;
+        maxY = ann.from.y + ry;
+      } else {
+        minX = Math.min(ann.from.x, ann.to.x);
+        maxX = Math.max(ann.from.x, ann.to.x);
+        minY = Math.min(ann.from.y, ann.to.y);
+        maxY = Math.max(ann.from.y, ann.to.y);
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+
+    function getAnnotationHandles(ann) {
+      if (ann.type === "arrow" || ann.type === "line") {
+        return [
+          { x: ann.from.x, y: ann.from.y, type: "from" },
+          { x: ann.to.x, y: ann.to.y, type: "to" }
+        ];
+      }
+      if (ann.type === "number" || ann.type === "text") {
+        return [];
+      }
+      const bounds = getAnnotationBounds(ann);
+      if (!bounds) return [];
+      const { x, y, w, h } = bounds;
+      const midX = x + w / 2;
+      const midY = y + h / 2;
+      return [
+        { x: x, y: y, type: "nw" },
+        { x: midX, y: y, type: "n" },
+        { x: x + w, y: y, type: "ne" },
+        { x: x, y: midY, type: "w" },
+        { x: x + w, y: midY, type: "e" },
+        { x: x, y: y + h, type: "sw" },
+        { x: midX, y: y + h, type: "s" },
+        { x: x + w, y: y + h, type: "se" }
+      ];
+    }
+
     function commitPastedImagesToBase() {
       if (!imageData || pastedImages.length === 0) return;
       const tempCanvas = document.createElement("canvas");
@@ -1037,6 +1132,30 @@
       ctx.setLineDash([]);
       ctx.fillStyle = "rgba(0, 120, 215, 0.9)";
       ctx.fillRect(layer.x + layer.width - handleSize, layer.y + layer.height - handleSize, handleSize, handleSize);
+      ctx.restore();
+    }
+
+    function drawAnnotationHandles(ann) {
+      const handles = getAnnotationHandles(ann);
+      if (handles.length === 0) return;
+      ctx.save();
+      ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
+      ctx.lineWidth = 1;
+      if (ann.type === "rect" || ann.type === "circle") {
+        const bounds = getAnnotationBounds(ann);
+        if (bounds) {
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h);
+        }
+      }
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#fff";
+      for (const h of handles) {
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, HANDLE_SIZE / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -1077,6 +1196,17 @@
     }
 
     function findElementAt(p) {
+      // 优先检测当前选中元素的控制点
+      const selected = getSelectedElement();
+      if (selected && selected.kind === "annotation") {
+        const handles = getAnnotationHandles(selected.item);
+        for (const h of handles) {
+          if (Math.hypot(p.x - h.x, p.y - h.y) < HANDLE_SIZE) {
+            return { kind: "annotation", item: selected.item, handle: h.type };
+          }
+        }
+      }
+
       const ann = findAnnotationAt(p);
       if (ann) return { kind: "annotation", item: ann };
       const layerResult = findPastedImageAt(p);
@@ -1102,6 +1232,11 @@
         }
       } else {
         draggingAnnotation = target.item;
+        draggingAnnotation._handle = target.handle;
+        if (target.handle) {
+          draggingAnnotation._origFrom = { ...target.item.from };
+          draggingAnnotation._origTo = { ...target.item.to };
+        }
         if (target.item.type === "number" || target.item.type === "text") {
           dragAnnotationOffset = { x: p.x - target.item.pos.x, y: p.y - target.item.pos.y };
         } else {
@@ -1151,18 +1286,57 @@
       }
 
       if (draggingAnnotation) {
+        if (draggingAnnotation._handle) {
+          const h = draggingAnnotation._handle;
+          const origFrom = draggingAnnotation._origFrom;
+          const origTo = draggingAnnotation._origTo;
+
+          if (h === "from") {
+            draggingAnnotation.from.x = p.x;
+            draggingAnnotation.from.y = p.y;
+          } else if (h === "to") {
+            draggingAnnotation.to.x = p.x;
+            draggingAnnotation.to.y = p.y;
+          } else if (draggingAnnotation.type === "circle") {
+            const rx = Math.abs(origTo.x - origFrom.x);
+            const ry = Math.abs(origTo.y - origFrom.y);
+            let minX = origFrom.x - rx; let maxX = origFrom.x + rx;
+            let minY = origFrom.y - ry; let maxY = origFrom.y + ry;
+
+            if (h.includes("w")) minX = p.x;
+            if (h.includes("e")) maxX = p.x;
+            if (h.includes("n")) minY = p.y;
+            if (h.includes("s")) maxY = p.y;
+
+            draggingAnnotation.from.x = (minX + maxX) / 2;
+            draggingAnnotation.from.y = (minY + maxY) / 2;
+            draggingAnnotation.to.x = draggingAnnotation.from.x + Math.abs(maxX - minX) / 2;
+            draggingAnnotation.to.y = draggingAnnotation.from.y + Math.abs(maxY - minY) / 2;
+          } else {
+            if (h.includes("w")) {
+              if (origFrom.x < origTo.x) draggingAnnotation.from.x = p.x;
+              else draggingAnnotation.to.x = p.x;
+            }
+            if (h.includes("e")) {
+              if (origFrom.x > origTo.x) draggingAnnotation.from.x = p.x;
+              else draggingAnnotation.to.x = p.x;
+            }
+            if (h.includes("n")) {
+              if (origFrom.y < origTo.y) draggingAnnotation.from.y = p.y;
+              else draggingAnnotation.to.y = p.y;
+            }
+            if (h.includes("s")) {
+              if (origFrom.y > origTo.y) draggingAnnotation.from.y = p.y;
+              else draggingAnnotation.to.y = p.y;
+            }
+          }
+          return true;
+        }
+
         if (draggingAnnotation.type === "number" || draggingAnnotation.type === "text") {
           draggingAnnotation.pos.x = p.x - dragAnnotationOffset.x;
           draggingAnnotation.pos.y = p.y - dragAnnotationOffset.y;
-        } else if (draggingAnnotation.type === "arrow" || draggingAnnotation.type === "line") {
-          const dx = p.x - dragAnnotationOffset.x;
-          const dy = p.y - dragAnnotationOffset.y;
-          draggingAnnotation.from.x += dx;
-          draggingAnnotation.from.y += dy;
-          draggingAnnotation.to.x += dx;
-          draggingAnnotation.to.y += dy;
-          dragAnnotationOffset = { x: p.x, y: p.y };
-        } else if (draggingAnnotation.type === "rect" || draggingAnnotation.type === "circle") {
+        } else {
           const dx = p.x - dragAnnotationOffset.x;
           const dy = p.y - dragAnnotationOffset.y;
           draggingAnnotation.from.x += dx;
@@ -1467,6 +1641,8 @@
           drawCircle(tctx, ann.from, ann.to, ann);
         } else if (ann.type === "number") {
           drawNumber(tctx, ann.pos, ann.val, ann.color, ann.size);
+        } else if (ann.type === "text") {
+          drawText(tctx, ann.pos, ann.val, ann.color, ann.size);
         }
       }
       return tempCanvas.toDataURL("image/png");
@@ -1508,47 +1684,18 @@
       }
       for (const ann of annotations) {
         if (isSelectedElement("annotation", ann)) {
-          ctx.save();
-          ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
-          if (ann.type === "number") {
-            const size = ann.size || NUMBER_SIZE;
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.arc(ann.pos.x, ann.pos.y, size * 0.9, 0, Math.PI * 2);
-            ctx.stroke();
-          } else if (ann.type === "arrow" || ann.type === "line") {
-            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
-            ctx.lineCap = "round";
-            ctx.beginPath();
-            ctx.moveTo(ann.from.x, ann.from.y);
-            ctx.lineTo(ann.to.x, ann.to.y);
-            ctx.stroke();
-          } else if (ann.type === "rect") {
-            const rect = normalizeRect(ann.from, ann.to);
-            if (rect) {
-              ctx.lineWidth = getAnnotationStroke(ann).width + 6;
-              ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+          if (ann.type === "number" || ann.type === "text") {
+            const bounds = getAnnotationBounds(ann);
+            if (bounds) {
+              ctx.save();
+              ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
+              ctx.setLineDash([4, 4]);
+              ctx.lineWidth = 1;
+              ctx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h);
+              ctx.restore();
             }
-          } else if (ann.type === "circle") {
-            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
-            ctx.beginPath();
-            const rx = Math.abs(ann.to.x - ann.from.x);
-            const ry = Math.abs(ann.to.y - ann.from.y);
-            if (ctx.ellipse) {
-              ctx.ellipse(ann.from.x, ann.from.y, rx, ry, 0, 0, Math.PI * 2);
-            } else {
-              ctx.arc(ann.from.x, ann.from.y, Math.max(rx, ry), 0, Math.PI * 2);
-            }
-            ctx.stroke();
-          } else if (ann.type === "text") {
-            ctx.font = `bold ${ann.size}px "Microsoft YaHei", sans-serif`;
-            const metrics = ctx.measureText(ann.val);
-            const w = metrics.width + 16;
-            const h = ann.size + 16;
-            ctx.lineWidth = 2;
-            ctx.strokeRect(ann.pos.x - w / 2, ann.pos.y - h / 2, w, h);
           }
-          ctx.restore();
+          drawAnnotationHandles(ann);
         }
       }
       drawSelectionOverlay();
@@ -1587,47 +1734,18 @@
       }
       for (const ann of annotations) {
         if (isSelectedElement("annotation", ann)) {
-          ctx.save();
-          ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
-          if (ann.type === "number") {
-            const size = ann.size || NUMBER_SIZE;
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.arc(ann.pos.x, ann.pos.y, size * 0.9, 0, Math.PI * 2);
-            ctx.stroke();
-          } else if (ann.type === "arrow" || ann.type === "line") {
-            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
-            ctx.lineCap = "round";
-            ctx.beginPath();
-            ctx.moveTo(ann.from.x, ann.from.y);
-            ctx.lineTo(ann.to.x, ann.to.y);
-            ctx.stroke();
-          } else if (ann.type === "rect") {
-            const rect = normalizeRect(ann.from, ann.to);
-            if (rect) {
-              ctx.lineWidth = getAnnotationStroke(ann).width + 6;
-              ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+          if (ann.type === "number" || ann.type === "text") {
+            const bounds = getAnnotationBounds(ann);
+            if (bounds) {
+              ctx.save();
+              ctx.strokeStyle = "rgba(0, 120, 215, 0.9)";
+              ctx.setLineDash([4, 4]);
+              ctx.lineWidth = 1;
+              ctx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h);
+              ctx.restore();
             }
-          } else if (ann.type === "circle") {
-            ctx.lineWidth = getAnnotationStroke(ann).width + 6;
-            ctx.beginPath();
-            const rx = Math.abs(ann.to.x - ann.from.x);
-            const ry = Math.abs(ann.to.y - ann.from.y);
-            if (ctx.ellipse) {
-              ctx.ellipse(ann.from.x, ann.from.y, rx, ry, 0, 0, Math.PI * 2);
-            } else {
-              ctx.arc(ann.from.x, ann.from.y, Math.max(rx, ry), 0, Math.PI * 2);
-            }
-            ctx.stroke();
-          } else if (ann.type === "text") {
-            ctx.font = `bold ${ann.size}px "Microsoft YaHei", sans-serif`;
-            const metrics = ctx.measureText(ann.val);
-            const w = metrics.width + 16;
-            const h = ann.size + 16;
-            ctx.lineWidth = 2;
-            ctx.strokeRect(ann.pos.x - w / 2, ann.pos.y - h / 2, w, h);
           }
-          ctx.restore();
+          drawAnnotationHandles(ann);
         }
       }
       drawSelectionOverlay();
@@ -1712,6 +1830,7 @@
     }
 
     async function handlePaste(event) {
+      console.log("Paste event triggered");
       const items = event.clipboardData && event.clipboardData.items;
       if (!items) return;
       for (const item of items) {
@@ -1884,6 +2003,30 @@
       if (moveDraggingElement(p)) {
         renderAnnotationsOnly();
         return;
+      }
+
+      // 更新鼠标指针样式
+      if (!selecting) {
+        const hit = findElementAt(p);
+        if (hit && hit.handle) {
+          const cursors = {
+            nw: "nwse-resize",
+            ne: "nesw-resize",
+            sw: "nesw-resize",
+            se: "nwse-resize",
+            n: "ns-resize",
+            s: "ns-resize",
+            w: "ew-resize",
+            e: "ew-resize",
+            from: "move",
+            to: "move"
+          };
+          canvas.style.cursor = cursors[hit.handle] || "default";
+        } else if (hit) {
+          canvas.style.cursor = "move";
+        } else {
+          canvas.style.cursor = "default";
+        }
       }
 
       if (!selecting) return;
@@ -2300,24 +2443,59 @@
     });
 
     strokeColorInput.addEventListener("input", () => {
-      if (!imageData) return;
+      const color = getStrokeColor();
+      if (selectedAnnotation) {
+        if (!hasMovedDuringDrag) pushUndoState();
+        hasMovedDuringDrag = true;
+        selectedAnnotation.color = color;
+        render();
+      }
       if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
-        setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
+        setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${color.toUpperCase()}`);
       }
     });
 
     strokeWidthInput.addEventListener("input", () => {
       syncStrokeControls();
-      if (!imageData) return;
+      const width = getStrokeWidth();
+      if (selectedAnnotation) {
+        if (!hasMovedDuringDrag) pushUndoState();
+        hasMovedDuringDrag = true;
+        if (selectedAnnotation.type === "number") {
+          selectedAnnotation.size = 14 + width * 2;
+        } else if (selectedAnnotation.type === "text") {
+          selectedAnnotation.size = 14 + width * 3;
+        } else {
+          selectedAnnotation.width = width;
+        }
+        render();
+      }
       if (currentTool === "arrow" || currentTool === "line" || currentTool === "rect" || currentTool === "circle") {
-        setStatus(`${getToolName(currentTool)}样式已更新：${getStrokeWidth()}px ${getStrokeColor().toUpperCase()}`);
+        setStatus(`${getToolName(currentTool)}样式已更新：${width}px ${getStrokeColor().toUpperCase()}`);
       }
     });
 
     numberAnnotationInput.addEventListener("input", () => {
       const val = parseInt(numberAnnotationInput.value);
       if (!isNaN(val)) {
-        numberCounter = val;
+        if (selectedAnnotation && selectedAnnotation.type === "number") {
+          if (!hasMovedDuringDrag) pushUndoState();
+          hasMovedDuringDrag = true;
+          selectedAnnotation.val = val;
+          render();
+        } else {
+          numberCounter = val;
+        }
+      }
+    });
+
+    textAnnotationInput.addEventListener("input", () => {
+      const val = textAnnotationInput.value;
+      if (selectedAnnotation && selectedAnnotation.type === "text") {
+        if (!hasMovedDuringDrag) pushUndoState();
+        hasMovedDuringDrag = true;
+        selectedAnnotation.val = val;
+        render();
       }
     });
 
@@ -2389,6 +2567,12 @@
     btnRotateR.addEventListener("click", () => doRotate('cw'));
     btnFlipH.addEventListener("click", () => doRotate('flipH'));
     btnFlipV.addEventListener("click", () => doRotate('flipV'));
+
+    window.onerror = function(msg, url, line, col, error) {
+      setStatus(`脚本错误: ${msg} (第${line}行)`);
+      console.error(msg, url, line, col, error);
+      return false;
+    };
 
     syncStrokeControls();
     setStatus("等待粘贴图片...");
