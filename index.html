@@ -2366,46 +2366,6 @@
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
 
       if (!ctrlOrMeta && imageData) {
-        if (key === "s") {
-          event.preventDefault();
-          setTool("range");
-          return;
-        }
-        if (key === "a") {
-          event.preventDefault();
-          setTool("arrow");
-          return;
-        }
-        if (key === "l") {
-          event.preventDefault();
-          setTool("line");
-          return;
-        }
-        if (key === "r") {
-          event.preventDefault();
-          setTool("rect");
-          return;
-        }
-        if (key === "c") {
-          event.preventDefault();
-          setTool("circle");
-          return;
-        }
-        if (key === "n") {
-          event.preventDefault();
-          setTool("number");
-          return;
-        }
-        if (key === "m") {
-          event.preventDefault();
-          setTool("mosaic");
-          return;
-        }
-        if (key === "t") {
-          event.preventDefault();
-          setTool("text");
-          return;
-        }
         if (key === "delete") {
           if (deleteSelectedElement()) {
             return;
