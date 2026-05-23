@@ -351,7 +351,7 @@
           </svg>
         </a>
       </div>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；首次粘贴载入主图，再次 <b>Ctrl + V</b> 会按鼠标位置追加图片。所有添加元素都可统一<b>选择、拖拽移动、Delete 删除</b>。拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“标注”工具拖拽绘制；“划线/矩形/圆”时按住 <b>Shift</b> 可锁定水平/正方形/正圆；“圆/椭圆”从圆心开始绘制。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；首次粘贴载入主图，再次 <b>Ctrl + V</b> 会按鼠标位置追加图片。所有添加元素都可统一<b>选择、拖拽移动、Delete 删除</b>。拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去，<b>按住 Alt 强行选择区间（免受贴图阻挡）</b>；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“标注”工具拖拽绘制；“划线/矩形/圆”时按住 <b>Shift</b> 可锁定水平/正方形/正圆；“圆/椭圆”从圆心开始绘制。</p>
     </section>
 
     <section class="panel toolbar">
@@ -1934,33 +1934,38 @@
       if (!imageData) return;
       updatePointerCanvasPoint(e.clientX, e.clientY);
       const p = getCanvasPoint(e);
-      const hit = findElementAt(p);
+      
+      // 如果按住 Alt 键，忽略任何已添加元素（如粘贴的图片、注解），强制进行删除区间拖拽选取
+      const hit = e.altKey ? null : findElementAt(p);
       hasMovedDuringDrag = false;
-      if (startDraggingElement(hit, p)) {
+      if (hit && startDraggingElement(hit, p)) {
         render();
         return;
       }
       clearSelectedElement();
 
       selecting = true;
-      dragType = currentTool;
+      
+      // 如果按住 Alt 键，即使当前是其他工具，也强制切换为 "range" (区间删除选择) 工具进行选取
+      const activeTool = e.altKey ? "range" : currentTool;
+      dragType = activeTool;
 
-      if (currentTool === "mosaic") {
+      if (activeTool === "mosaic") {
         mosaicStart = p;
         mosaicCurrent = p;
-      } else if (currentTool === "arrow") {
+      } else if (activeTool === "arrow") {
         arrowStart = p;
         arrowCurrent = p;
-      } else if (currentTool === "line") {
+      } else if (activeTool === "line") {
         lineStart = p;
         lineCurrent = p;
-      } else if (currentTool === "rect") {
+      } else if (activeTool === "rect") {
         rectStart = p;
         rectCurrent = p;
-      } else if (currentTool === "circle") {
+      } else if (activeTool === "circle") {
         circleStart = p;
         circleCurrent = p;
-      } else if (currentTool === "number") {
+      } else if (activeTool === "number") {
         pushUndoState();
         const numVal = parseInt(numberAnnotationInput.value) || numberCounter;
         drawNumberOnImage(p, numVal);
@@ -1970,7 +1975,7 @@
         setStatus(`已添加数字 ${numVal}`);
         render();
         return;
-      } else if (currentTool === "text") {
+      } else if (activeTool === "text") {
         pushUndoState();
         const textVal = textAnnotationInput.value || "文字内容";
         drawTextOnImage(p, textVal);
@@ -2007,7 +2012,7 @@
 
       // 更新鼠标指针样式
       if (!selecting) {
-        const hit = findElementAt(p);
+        const hit = e.altKey ? null : findElementAt(p);
         if (hit && hit.handle) {
           const cursors = {
             nw: "nwse-resize",
@@ -2027,7 +2032,7 @@
         } else if (hit) {
           canvas.style.cursor = "move";
         } else {
-          canvas.style.cursor = "default";
+          canvas.style.cursor = e.altKey ? "crosshair" : "default";
         }
       }
 
