@@ -484,6 +484,7 @@
     let cutRanges = [];
     let cutRangesX = [];
     let cutDirection = "Y"; // "Y" 表示水平区间（高度），"X" 表示垂直区间（宽度）
+    let cutDirectionLocked = false;
     let dragStartX = null;
     let dragCurrentX = null;
     let dragType = "range";
@@ -511,6 +512,8 @@
     const NUMBER_BG = "#ffffff";
     const NUMBER_SIZE = 24;
     const CLICK_CLEAR_THRESHOLD = 2;
+    const DIRECTION_MIN_AXIS = 8;
+    const DIRECTION_DOMINANCE_RATIO = 1.5;
     const HANDLE_SIZE = 8;
     const HANDLE_PADDING = 4;
     const ZOOM_MIN = 0.2;
@@ -715,7 +718,7 @@
     }
 
     function getPreviewRanges() {
-      if (!selecting || dragType !== "range" || cutDirection !== "Y") return cutRanges;
+      if (!selecting || dragType !== "range" || cutDirection !== "Y" || !cutDirectionLocked) return cutRanges;
       const draft = normalizeRange(dragStartY, dragCurrentY);
       if (!draft) return cutRanges;
       if (dragMode === "add") return addRange(cutRanges, draft);
@@ -775,7 +778,7 @@
     }
 
     function getPreviewRangesX() {
-      if (!selecting || dragType !== "range" || cutDirection !== "X") return cutRangesX;
+      if (!selecting || dragType !== "range" || cutDirection !== "X" || !cutDirectionLocked) return cutRangesX;
       const draft = normalizeRangeX(dragStartX, dragCurrentX);
       if (!draft) return cutRangesX;
       if (dragMode === "add") return addRangeX(cutRangesX, draft);
@@ -804,6 +807,7 @@
       cutRanges = [];
       cutRangesX = [];
       cutDirection = "Y";
+      cutDirectionLocked = false;
       mosaicStart = null;
       mosaicCurrent = null;
       arrowStart = null;
@@ -884,6 +888,10 @@
       canvas.style.height = `${Math.round(canvas.height * zoomScale)}px`;
     }
 
+    function syncCanvasDisplaySize() {
+      applyCanvasZoom();
+    }
+
     function cloneImageData(src) {
       return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
     }
@@ -896,6 +904,7 @@
       const { data, anns, layers, counter } = nextState;
       canvas.width = data.width;
       canvas.height = data.height;
+      syncCanvasDisplaySize();
       imageData = cloneImageData(data);
       annotations = JSON.parse(JSON.stringify(anns || []));
       pastedImages = clonePastedImages(layers || []);
@@ -949,9 +958,9 @@
         parts.push(`<span>垂直条带: ${rangesX.length} 段</span>`);
         parts.push(`<span>将删除总宽度: ${totalSelectedWidth(rangesX)}px</span>`);
       }
-      if (selecting && dragType === "range" && cutDirection === "X") {
+      if (selecting && dragType === "range" && cutDirectionLocked && cutDirection === "X") {
         parts.push(`<span>方向: 垂直条带</span>`);
-      } else if (selecting && dragType === "range" && cutDirection === "Y") {
+      } else if (selecting && dragType === "range" && cutDirectionLocked && cutDirection === "Y") {
         parts.push(`<span>方向: 水平条带</span>`);
       }
       parts.push(`<span>缩放: ${(zoomScale * 100).toFixed(0)}%</span>`);
@@ -1061,6 +1070,157 @@
       lastPointerCanvasPoint = inside ? getCanvasPointFromClient(clientX, clientY) : null;
     }
 
+    function isEmptyContentPixel(data, idx) {
+      const a = data[idx + 3];
+      if (a === 0) return true;
+      return data[idx] === 255 && data[idx + 1] === 255 && data[idx + 2] === 255;
+    }
+
+    function getImageDataContentBounds(src) {
+      const { width, height, data } = src;
+      let top = 0;
+      let bottom = height - 1;
+      let left = 0;
+      let right = width - 1;
+
+      topLoop: for (; top < height; top++) {
+        for (let x = 0; x < width; x++) {
+          if (!isEmptyContentPixel(data, (top * width + x) * 4)) break topLoop;
+        }
+      }
+      bottomLoop: for (; bottom >= top; bottom--) {
+        for (let x = 0; x < width; x++) {
+          if (!isEmptyContentPixel(data, (bottom * width + x) * 4)) break bottomLoop;
+        }
+      }
+      leftLoop: for (; left < width; left++) {
+        for (let y = top; y <= bottom; y++) {
+          if (!isEmptyContentPixel(data, (y * width + left) * 4)) break leftLoop;
+        }
+      }
+      rightLoop: for (; right >= left; right--) {
+        for (let y = top; y <= bottom; y++) {
+          if (!isEmptyContentPixel(data, (y * width + right) * 4)) break rightLoop;
+        }
+      }
+
+      if (top > bottom || left > right) {
+        return { x: 0, y: 0, w: width, h: height };
+      }
+      return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+    }
+
+    function includeBoundsUnion(minX, minY, maxX, maxY, rect) {
+      return {
+        minX: Math.min(minX, rect.x),
+        minY: Math.min(minY, rect.y),
+        maxX: Math.max(maxX, rect.x + rect.w),
+        maxY: Math.max(maxY, rect.y + rect.h)
+      };
+    }
+
+    function getAllContentBounds() {
+      if (!imageData) return null;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+
+      const baseBounds = getImageDataContentBounds(imageData);
+      ({ minX, minY, maxX, maxY } = includeBoundsUnion(minX, minY, maxX, maxY, baseBounds));
+
+      for (const layer of pastedImages) {
+        ({ minX, minY, maxX, maxY } = includeBoundsUnion(minX, minY, maxX, maxY, {
+          x: layer.x,
+          y: layer.y,
+          w: layer.width,
+          h: layer.height
+        }));
+      }
+
+      for (const ann of annotations) {
+        const bounds = getAnnotationBounds(ann);
+        if (bounds) {
+          ({ minX, minY, maxX, maxY } = includeBoundsUnion(minX, minY, maxX, maxY, bounds));
+        }
+      }
+
+      if (maxX < minX || maxY < minY) return null;
+      return {
+        x: Math.max(0, Math.floor(minX)),
+        y: Math.max(0, Math.floor(minY)),
+        w: Math.max(1, Math.ceil(maxX - minX)),
+        h: Math.max(1, Math.ceil(maxY - minY))
+      };
+    }
+
+    function cropImageData(src, x, y, w, h) {
+      const dst = new ImageData(w, h);
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          const srcIdx = ((y + row) * src.width + (x + col)) * 4;
+          const dstIdx = (row * w + col) * 4;
+          dst.data[dstIdx] = src.data[srcIdx];
+          dst.data[dstIdx + 1] = src.data[srcIdx + 1];
+          dst.data[dstIdx + 2] = src.data[srcIdx + 2];
+          dst.data[dstIdx + 3] = src.data[srcIdx + 3];
+        }
+      }
+      return dst;
+    }
+
+    function offsetContentBy(dx, dy) {
+      if (dx === 0 && dy === 0) return;
+      for (const layer of pastedImages) {
+        layer.x -= dx;
+        layer.y -= dy;
+      }
+      for (const ann of annotations) {
+        if (ann.type === "number" || ann.type === "text") {
+          ann.pos.x -= dx;
+          ann.pos.y -= dy;
+        } else {
+          ann.from.x -= dx;
+          ann.from.y -= dy;
+          ann.to.x -= dx;
+          ann.to.y -= dy;
+        }
+      }
+    }
+
+    function fitCanvasToContent() {
+      if (!imageData) return false;
+      const bounds = getAllContentBounds();
+      if (!bounds) return false;
+      const { x, y, w, h } = bounds;
+      if (x === 0 && y === 0 && w === canvas.width && h === canvas.height) return false;
+
+      imageData = cropImageData(imageData, x, y, w, h);
+      offsetContentBy(x, y);
+      canvas.width = w;
+      canvas.height = h;
+      syncCanvasDisplaySize();
+      return true;
+    }
+
+    function ensureCanvasFitsContent() {
+      if (!imageData) return;
+      let nextWidth = canvas.width;
+      let nextHeight = canvas.height;
+      for (const layer of pastedImages) {
+        nextWidth = Math.max(nextWidth, Math.round(layer.x + layer.width));
+        nextHeight = Math.max(nextHeight, Math.round(layer.y + layer.height));
+      }
+      for (const ann of annotations) {
+        const bounds = getAnnotationBounds(ann);
+        if (bounds) {
+          nextWidth = Math.max(nextWidth, Math.ceil(bounds.x + bounds.w));
+          nextHeight = Math.max(nextHeight, Math.ceil(bounds.y + bounds.h));
+        }
+      }
+      expandBaseCanvas(nextWidth, nextHeight);
+    }
+
     function expandBaseCanvas(nextWidth, nextHeight) {
       if (!imageData) return;
       if (nextWidth <= canvas.width && nextHeight <= canvas.height) return;
@@ -1074,6 +1234,12 @@
       canvas.width = tempCanvas.width;
       canvas.height = tempCanvas.height;
       imageData = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      syncCanvasDisplaySize();
+    }
+
+    function syncCanvasToContentLive() {
+      ensureCanvasFitsContent();
+      fitCanvasToContent();
     }
 
     function getPastePosition(snapshot) {
@@ -1112,6 +1278,7 @@
       pastedImages.push(layer);
       setSelectedElement("pastedImage", layer);
       clearSelection();
+      fitCanvasToContent();
       setStatus(`已追加图片: ${snapshot.width} x ${snapshot.height}，放置在 x=${layer.x}, y=${layer.y}`);
       render();
     }
@@ -1264,9 +1431,10 @@
     }
 
     function clampPastedImagePosition(layer, x, y) {
-      const nextWidth = Math.max(canvas.width, Math.round(x + layer.width));
-      const nextHeight = Math.max(canvas.height, Math.round(y + layer.height));
-      expandBaseCanvas(nextWidth, nextHeight);
+      expandBaseCanvas(
+        Math.max(canvas.width, Math.round(x + layer.width)),
+        Math.max(canvas.height, Math.round(y + layer.height))
+      );
       return {
         x: Math.max(0, Math.round(x)),
         y: Math.max(0, Math.round(y))
@@ -1351,6 +1519,7 @@
 
           draggingPastedImage.width = nextW;
           draggingPastedImage.height = nextH;
+          ensureCanvasFitsContent();
         } else {
           const nextPos = clampPastedImagePosition(
             draggingPastedImage,
@@ -1360,6 +1529,7 @@
           draggingPastedImage.x = nextPos.x;
           draggingPastedImage.y = nextPos.y;
         }
+        syncCanvasToContentLive();
         return true;
       }
 
@@ -1408,10 +1578,7 @@
               else draggingAnnotation.to.y = p.y;
             }
           }
-          return true;
-        }
-
-        if (draggingAnnotation.type === "number" || draggingAnnotation.type === "text") {
+        } else if (draggingAnnotation.type === "number" || draggingAnnotation.type === "text") {
           draggingAnnotation.pos.x = p.x - dragAnnotationOffset.x;
           draggingAnnotation.pos.y = p.y - dragAnnotationOffset.y;
         } else {
@@ -1423,6 +1590,7 @@
           draggingAnnotation.to.y += dy;
           dragAnnotationOffset = { x: p.x, y: p.y };
         }
+        syncCanvasToContentLive();
         return true;
       }
 
@@ -1431,12 +1599,14 @@
 
     function finishDraggingElement() {
       if (draggingPastedImage) {
+        syncCanvasToContentLive();
         setStatus(`追加图片位置已更新: x=${Math.round(draggingPastedImage.x)}, y=${Math.round(draggingPastedImage.y)}`);
         draggingPastedImage = null;
         render();
         return true;
       }
       if (draggingAnnotation) {
+        syncCanvasToContentLive();
         setStatus(`${getElementLabel({ kind: "annotation", item: draggingAnnotation })}位置已更新`);
         draggingAnnotation = null;
         render();
@@ -1455,18 +1625,38 @@
         annotations = annotations.filter((item) => item !== target.item);
       }
       clearSelectedElement();
+      fitCanvasToContent();
       setStatus(`已删除选中的${getElementLabel(target)}`);
       render();
       return true;
     }
 
 
-    function resolveCutDirection() {
-      if (dragStartX === null || dragStartY === null || dragCurrentX === null || dragCurrentY === null) return "Y";
-      const dx = Math.abs(dragCurrentX - dragStartX);
-      const dy = Math.abs(dragCurrentY - dragStartY);
+    function getCutDragDelta() {
+      if (dragStartX === null || dragStartY === null || dragCurrentX === null || dragCurrentY === null) {
+        return { dx: 0, dy: 0 };
+      }
+      return {
+        dx: Math.abs(dragCurrentX - dragStartX),
+        dy: Math.abs(dragCurrentY - dragStartY)
+      };
+    }
+
+    function pickCutDirectionFromDelta(dx, dy, strict = false) {
       if (dx <= CLICK_CLEAR_THRESHOLD && dy <= CLICK_CLEAR_THRESHOLD) return null;
+      if (strict) {
+        const dominant = Math.max(dx, dy);
+        const subordinate = Math.min(dx, dy);
+        if (dominant < DIRECTION_MIN_AXIS) return null;
+        if (subordinate > 0 && dominant / subordinate < DIRECTION_DOMINANCE_RATIO) return null;
+      }
       return dx > dy ? "X" : "Y";
+    }
+
+    function resolveCutDirection(strict = true) {
+      if (cutDirectionLocked) return cutDirection;
+      const { dx, dy } = getCutDragDelta();
+      return pickCutDirectionFromDelta(dx, dy, strict);
     }
 
     function drawSelectionOverlay() {
@@ -1762,6 +1952,7 @@
 
     function renderAnnotationsOnly() {
       if (!imageData) return;
+      applyCanvasZoom();
       renderBaseImage();
       for (const ann of annotations) {
         if (ann.type === "arrow") {
@@ -1916,7 +2107,8 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
       imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      originalData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      fitCanvasToContent();
+      originalData = cloneImageData(imageData);
       zoomScale = 1;
       annotations = [];
       pastedImages = [];
@@ -2091,6 +2283,7 @@
         dragStartX = p.x;
         dragCurrentX = p.x;
         cutDirection = "Y";
+        cutDirectionLocked = false;
         if (e.shiftKey) {
           dragMode = "subtract";
         } else if (e.ctrlKey || e.metaKey) {
@@ -2154,8 +2347,13 @@
       } else {
         dragCurrentY = p.y;
         dragCurrentX = p.x;
-        const dir = resolveCutDirection();
-        if (dir) cutDirection = dir;
+        if (!cutDirectionLocked) {
+          const dir = resolveCutDirection(true);
+          if (dir) {
+            cutDirection = dir;
+            cutDirectionLocked = true;
+          }
+        }
       }
       render();
       updateButtons();
@@ -2231,7 +2429,7 @@
         circleStart = null;
         circleCurrent = null;
       } else {
-        const dir = resolveCutDirection();
+        const dir = cutDirectionLocked ? cutDirection : resolveCutDirection(false);
         const isPlainClick = dragMode === "replace" && dir === null;
         if (isPlainClick) {
           cutRanges = [];
@@ -2264,6 +2462,7 @@
         dragCurrentY = null;
         dragStartX = null;
         dragCurrentX = null;
+        cutDirectionLocked = false;
         if (hasSelection()) {
           const parts = [];
           if (cutRanges.length > 0) {
