@@ -351,7 +351,7 @@
           </svg>
         </a>
       </div>
-      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；首次粘贴载入主图，再次 <b>Ctrl + V</b> 会按鼠标位置追加图片。所有添加元素都可统一<b>选择、拖拽移动、Delete 删除</b>。拖拽选择裁剪区间：普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去，<b>按住 Alt 强行选择区间（免受贴图阻挡）</b>；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“标注”工具拖拽绘制；“划线/矩形/圆”时按住 <b>Shift</b> 可锁定水平/正方形/正圆；“圆/椭圆”从圆心开始绘制。</p>
+      <p class="hint">按 <b>Ctrl + V</b> 粘贴图片；首次粘贴载入主图，再次 <b>Ctrl + V</b> 会按鼠标位置追加图片。所有添加元素都可统一<b>选择、拖拽移动、Delete 删除</b>。拖拽选择裁剪区间：<b>纵向拖拽</b>选水平条带，<b>横向拖拽</b>选垂直条带；普通拖拽重置，<b>Ctrl</b> 增加，<b>Shift</b> 减去，<b>按住 Alt 强行选择区间（免受贴图阻挡）</b>；按 <b>Delete</b> 执行删除并接续。<br>“马赛克”拖拽打码；“标注”工具拖拽绘制；“划线/矩形/圆”时按住 <b>Shift</b> 可锁定水平/正方形/正圆；“圆/椭圆”从圆心开始绘制。</p>
     </section>
 
     <section class="panel toolbar">
@@ -482,6 +482,10 @@
     let dragPastedImageOffset = { x: 0, y: 0 };
     let numberCounter = 1;
     let cutRanges = [];
+    let cutRangesX = [];
+    let cutDirection = "Y"; // "Y" 表示水平区间（高度），"X" 表示垂直区间（宽度）
+    let dragStartX = null;
+    let dragCurrentX = null;
     let dragType = "range";
     let dragMode = "replace";
     let mosaicStart = null;
@@ -519,7 +523,7 @@
     const pastedImageSourceCache = new Map();
 
     const TOOL_DESCRIPTIONS = {
-      range: () => "删除区间选择 - 拖拽选择要删除的垂直区间，也可选择和移动已添加元素",
+      range: () => "删除区间选择 - 纵向拖拽删水平条带，横向拖拽删垂直条带，也可选择和移动已添加元素",
       mosaic: () => `马赛克 - 拖拽矩形打码（块大小 ${MOSAIC_BLOCK}px）`,
       arrow: () => `画箭头 - 拖拽绘制箭头，可调整颜色和粗细（${getStrokeWidth()}px）`,
       line: () => `划线 - 拖拽绘制直线，按 Shift 锁定水平，可调整颜色和粗细（${getStrokeWidth()}px）`,
@@ -661,7 +665,7 @@
     }
 
     function hasSelection() {
-      return cutRanges.length > 0;
+      return cutRanges.length > 0 || cutRangesX.length > 0;
     }
 
     function normalizeRange(yA, yB) {
@@ -711,7 +715,7 @@
     }
 
     function getPreviewRanges() {
-      if (!selecting || dragType !== "range") return cutRanges;
+      if (!selecting || dragType !== "range" || cutDirection !== "Y") return cutRanges;
       const draft = normalizeRange(dragStartY, dragCurrentY);
       if (!draft) return cutRanges;
       if (dragMode === "add") return addRange(cutRanges, draft);
@@ -721,6 +725,66 @@
 
     function totalSelectedHeight(ranges) {
       return ranges.reduce((sum, r) => sum + r.h, 0);
+    }
+
+    // 垂直区间删除（X轴）相关函数
+    function normalizeRangeX(xA, xB) {
+      const x1 = Math.max(0, Math.min(xA, xB));
+      const x2 = Math.min(canvas.width, Math.max(xA, xB));
+      const w = Math.max(0, Math.round(x2 - x1));
+      if (w <= 0) return null;
+      return { x1: Math.round(x1), x2: Math.round(x2), w };
+    }
+
+    function mergeRangesX(ranges) {
+      if (ranges.length <= 1) return [...ranges];
+      const sorted = [...ranges].sort((a, b) => a.x1 - b.x1);
+      const merged = [{ ...sorted[0] }];
+      for (let i = 1; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const last = merged[merged.length - 1];
+        if (cur.x1 <= last.x2) {
+          last.x2 = Math.max(last.x2, cur.x2);
+          last.w = last.x2 - last.x1;
+        } else {
+          merged.push({ ...cur });
+        }
+      }
+      return merged;
+    }
+
+    function addRangeX(ranges, range) {
+      return mergeRangesX([...ranges, { ...range }]);
+    }
+
+    function subtractRangeX(ranges, sub) {
+      const out = [];
+      for (const r of ranges) {
+        if (sub.x2 <= r.x1 || sub.x1 >= r.x2) {
+          out.push({ ...r });
+          continue;
+        }
+        if (sub.x1 > r.x1) {
+          out.push({ x1: r.x1, x2: sub.x1, w: sub.x1 - r.x1 });
+        }
+        if (sub.x2 < r.x2) {
+          out.push({ x1: sub.x2, x2: r.x2, w: r.x2 - sub.x2 });
+        }
+      }
+      return out.filter((r) => r.w > 0);
+    }
+
+    function getPreviewRangesX() {
+      if (!selecting || dragType !== "range" || cutDirection !== "X") return cutRangesX;
+      const draft = normalizeRangeX(dragStartX, dragCurrentX);
+      if (!draft) return cutRangesX;
+      if (dragMode === "add") return addRangeX(cutRangesX, draft);
+      if (dragMode === "subtract") return subtractRangeX(cutRangesX, draft);
+      return [draft];
+    }
+
+    function totalSelectedWidth(ranges) {
+      return ranges.reduce((sum, r) => sum + r.w, 0);
     }
 
     function modeText(mode) {
@@ -734,8 +798,12 @@
       dragType = "range";
       dragStartY = null;
       dragCurrentY = null;
+      dragStartX = null;
+      dragCurrentX = null;
       dragMode = "replace";
       cutRanges = [];
+      cutRangesX = [];
+      cutDirection = "Y";
       mosaicStart = null;
       mosaicCurrent = null;
       arrowStart = null;
@@ -873,8 +941,18 @@
       }
       const ranges = getPreviewRanges();
       if (ranges.length > 0) {
-        parts.push(`<span>区间数: ${ranges.length}</span>`);
+        parts.push(`<span>水平条带: ${ranges.length} 段</span>`);
         parts.push(`<span>将删除总高度: ${totalSelectedHeight(ranges)}px</span>`);
+      }
+      const rangesX = getPreviewRangesX();
+      if (rangesX.length > 0) {
+        parts.push(`<span>垂直条带: ${rangesX.length} 段</span>`);
+        parts.push(`<span>将删除总宽度: ${totalSelectedWidth(rangesX)}px</span>`);
+      }
+      if (selecting && dragType === "range" && cutDirection === "X") {
+        parts.push(`<span>方向: 垂直条带</span>`);
+      } else if (selecting && dragType === "range" && cutDirection === "Y") {
+        parts.push(`<span>方向: 水平条带</span>`);
       }
       parts.push(`<span>缩放: ${(zoomScale * 100).toFixed(0)}%</span>`);
       if (selecting) {
@@ -1383,6 +1461,14 @@
     }
 
 
+    function resolveCutDirection() {
+      if (dragStartX === null || dragStartY === null || dragCurrentX === null || dragCurrentY === null) return "Y";
+      const dx = Math.abs(dragCurrentX - dragStartX);
+      const dy = Math.abs(dragCurrentY - dragStartY);
+      if (dx <= CLICK_CLEAR_THRESHOLD && dy <= CLICK_CLEAR_THRESHOLD) return null;
+      return dx > dy ? "X" : "Y";
+    }
+
     function drawSelectionOverlay() {
       const ranges = getPreviewRanges();
       if (ranges.length > 0) {
@@ -1394,6 +1480,21 @@
           ctx.fillRect(0, r.y1, canvas.width, r.h);
           if (r.h >= 2) {
             ctx.strokeRect(1, r.y1 + 1, canvas.width - 2, r.h - 2);
+          }
+          ctx.restore();
+        }
+      }
+
+      const rangesX = getPreviewRangesX();
+      if (rangesX.length > 0) {
+        for (const r of rangesX) {
+          ctx.save();
+          ctx.fillStyle = "rgba(189,45,45,0.22)";
+          ctx.strokeStyle = "rgba(189,45,45,0.9)";
+          ctx.lineWidth = 2;
+          ctx.fillRect(r.x1, 0, r.w, canvas.height);
+          if (r.w >= 2) {
+            ctx.strokeRect(r.x1 + 1, 1, r.w - 2, canvas.height - 2);
           }
           ctx.restore();
         }
@@ -1987,6 +2088,9 @@
         dragType = "range";
         dragStartY = p.y;
         dragCurrentY = p.y;
+        dragStartX = p.x;
+        dragCurrentX = p.x;
+        cutDirection = "Y";
         if (e.shiftKey) {
           dragMode = "subtract";
         } else if (e.ctrlKey || e.metaKey) {
@@ -2049,6 +2153,9 @@
         circleCurrent = p;
       } else {
         dragCurrentY = p.y;
+        dragCurrentX = p.x;
+        const dir = resolveCutDirection();
+        if (dir) cutDirection = dir;
       }
       render();
       updateButtons();
@@ -2124,27 +2231,48 @@
         circleStart = null;
         circleCurrent = null;
       } else {
-        const isPlainClick = dragMode === "replace"
-          && dragStartY !== null
-          && dragCurrentY !== null
-          && Math.abs(dragCurrentY - dragStartY) <= CLICK_CLEAR_THRESHOLD;
-        const draft = normalizeRange(dragStartY, dragCurrentY);
+        const dir = resolveCutDirection();
+        const isPlainClick = dragMode === "replace" && dir === null;
         if (isPlainClick) {
           cutRanges = [];
-        } else if (draft) {
-          if (dragMode === "add") {
-            cutRanges = addRange(cutRanges, draft);
-          } else if (dragMode === "subtract") {
-            cutRanges = subtractRange(cutRanges, draft);
-          } else {
-            cutRanges = [draft];
+          cutRangesX = [];
+        } else if (dir === "X") {
+          const draft = normalizeRangeX(dragStartX, dragCurrentX);
+          if (draft) {
+            if (dragMode === "add") {
+              cutRangesX = addRangeX(cutRangesX, draft);
+            } else if (dragMode === "subtract") {
+              cutRangesX = subtractRangeX(cutRangesX, draft);
+            } else {
+              cutRangesX = [draft];
+            }
+          }
+        } else {
+          const draft = normalizeRange(dragStartY, dragCurrentY);
+          if (draft) {
+            if (dragMode === "add") {
+              cutRanges = addRange(cutRanges, draft);
+            } else if (dragMode === "subtract") {
+              cutRanges = subtractRange(cutRanges, draft);
+            } else {
+              cutRanges = [draft];
+            }
           }
         }
         selecting = false;
         dragStartY = null;
         dragCurrentY = null;
+        dragStartX = null;
+        dragCurrentX = null;
         if (hasSelection()) {
-          setStatus(`已更新区间：${cutRanges.length} 段，总删除高度 ${totalSelectedHeight(cutRanges)}px。按 Delete 或点击按钮执行删除并接续`);
+          const parts = [];
+          if (cutRanges.length > 0) {
+            parts.push(`水平 ${cutRanges.length} 段/${totalSelectedHeight(cutRanges)}px`);
+          }
+          if (cutRangesX.length > 0) {
+            parts.push(`垂直 ${cutRangesX.length} 段/${totalSelectedWidth(cutRangesX)}px`);
+          }
+          setStatus(`已更新区间：${parts.join("，")}。按 Delete 或点击按钮执行删除并接续`);
         } else {
           setStatus("当前没有选中区间。");
         }
@@ -2192,21 +2320,68 @@
       setStatus("缩放已还原到 1:1");
     });
 
-    function doCut() {
-      if (!imageData || !hasSelection()) return;
+    function pickGapColor(oldCtx, width, height, isHorizontalGap, pos) {
+      let rAvg, gAvg, bAvg;
+      if (isHorizontalGap) {
+        const topY = Math.max(0, pos - 1);
+        const botY = Math.min(height - 1, pos);
+        const topPixels = oldCtx.getImageData(0, topY, width, 1).data;
+        const botPixels = oldCtx.getImageData(0, botY, width, 1).data;
+        let tr = 0, tg = 0, tb = 0, br = 0, bg = 0, bb = 0;
+        const step = Math.max(1, Math.floor(width / 100));
+        let cnt = 0;
+        for (let i = 0; i < width; i += step) {
+          const ti = i * 4;
+          tr += topPixels[ti]; tg += topPixels[ti + 1]; tb += topPixels[ti + 2];
+          br += botPixels[ti]; bg += botPixels[ti + 1]; bb += botPixels[ti + 2];
+          cnt++;
+        }
+        rAvg = Math.round((tr + br) / 2 / cnt);
+        gAvg = Math.round((tg + bg) / 2 / cnt);
+        bAvg = Math.round((tb + bb) / 2 / cnt);
+      } else {
+        const leftX = Math.max(0, pos - 1);
+        const rightX = Math.min(width - 1, pos);
+        const leftPixels = oldCtx.getImageData(leftX, 0, 1, height).data;
+        const rightPixels = oldCtx.getImageData(rightX, 0, 1, height).data;
+        let lr = 0, lg = 0, lb = 0, rr = 0, rg = 0, rb = 0;
+        const step = Math.max(1, Math.floor(height / 100));
+        let cnt = 0;
+        for (let i = 0; i < height; i += step) {
+          const ti = i * 4;
+          lr += leftPixels[ti]; lg += leftPixels[ti + 1]; lb += leftPixels[ti + 2];
+          rr += rightPixels[ti]; rg += rightPixels[ti + 1]; rb += rightPixels[ti + 2];
+          cnt++;
+        }
+        rAvg = Math.round((lr + rr) / 2 / cnt);
+        gAvg = Math.round((lg + rg) / 2 / cnt);
+        bAvg = Math.round((lb + rb) / 2 / cnt);
+      }
+      const L = 0.299 * rAvg + 0.587 * gAvg + 0.114 * bAvg;
+      if (L > 128) {
+        rAvg = Math.max(0, rAvg - 30);
+        gAvg = Math.max(0, gAvg - 30);
+        bAvg = Math.max(0, bAvg - 30);
+      } else {
+        rAvg = Math.min(255, rAvg + 30);
+        gAvg = Math.min(255, gAvg + 30);
+        bAvg = Math.min(255, bAvg + 30);
+      }
+      return `rgb(${rAvg},${gAvg},${bAvg})`;
+    }
+
+    function doCutY() {
       const ranges = mergeRanges(cutRanges);
       const removed = totalSelectedHeight(ranges);
       if (removed <= 0 || removed >= canvas.height) {
         setStatus("选中高度无效，无法删除整个图片。");
-        return;
+        return false;
       }
-      pushUndoState();
       commitPastedImagesToBase();
 
       const oldCanvas = document.createElement("canvas");
       oldCanvas.width = canvas.width;
       oldCanvas.height = canvas.height;
-      // commitPastedImagesToBase(); // 移除强制合并，改为坐标转换
       oldCanvas.getContext("2d").putImageData(imageData, 0, 0);
 
       const gapTotal = CUT_GAP_PX * ranges.length;
@@ -2215,57 +2390,17 @@
       newCanvas.width = canvas.width;
       newCanvas.height = newH;
       const nctx = newCanvas.getContext("2d");
-      nctx.fillStyle = CUT_GAP_COLOR;
+      const oldCtx = oldCanvas.getContext("2d");
 
       let srcY = 0;
       let dstY = 0;
-      const oldCtx = oldCanvas.getContext("2d");
-
       for (const r of ranges) {
         const keepH = r.y1 - srcY;
         if (keepH > 0) {
           nctx.drawImage(oldCanvas, 0, srcY, canvas.width, keepH, 0, dstY, canvas.width, keepH);
           dstY += keepH;
         }
-        
-        // 自适应缝隙颜色并且与底色区分
-        const topY = Math.max(0, r.y1 - 1);
-        const botY = Math.min(canvas.height - 1, r.y2);
-        
-        const topPixels = oldCtx.getImageData(0, topY, canvas.width, 1).data;
-        const botPixels = oldCtx.getImageData(0, botY, canvas.width, 1).data;
-        
-        let tr = 0, tg = 0, tb = 0;
-        let br = 0, bg = 0, bb = 0;
-        const step = Math.max(1, Math.floor(canvas.width / 100));
-        let cnt = 0;
-        for (let i = 0; i < canvas.width; i += step) {
-          const ti = i * 4;
-          tr += topPixels[ti]; tg += topPixels[ti + 1]; tb += topPixels[ti + 2];
-          br += botPixels[ti]; bg += botPixels[ti + 1]; bb += botPixels[ti + 2];
-          cnt++;
-        }
-        
-        let rAvg = Math.round((tr + br) / 2 / cnt);
-        let gAvg = Math.round((tg + bg) / 2 / cnt);
-        let bAvg = Math.round((tb + bb) / 2 / cnt);
-
-        // 计算感知亮度 (Luminance)
-        const L = 0.299 * rAvg + 0.587 * gAvg + 0.114 * bAvg;
-        
-        // 如果是浅底色 (L > 128)，则调深 30（偏向灰色）；如果是深底色，则调浅 30（偏向灰色）
-        if (L > 128) {
-          rAvg = Math.max(0, rAvg - 30);
-          gAvg = Math.max(0, gAvg - 30);
-          bAvg = Math.max(0, bAvg - 30);
-        } else {
-          rAvg = Math.min(255, rAvg + 30);
-          gAvg = Math.min(255, gAvg + 30);
-          bAvg = Math.min(255, bAvg + 30);
-        }
-
-        nctx.fillStyle = `rgb(${rAvg},${gAvg},${bAvg})`;
-        
+        nctx.fillStyle = pickGapColor(oldCtx, canvas.width, canvas.height, true, r.y1);
         nctx.fillRect(0, dstY, canvas.width, CUT_GAP_PX);
         dstY += CUT_GAP_PX;
         srcY = r.y2;
@@ -2275,7 +2410,6 @@
         nctx.drawImage(oldCanvas, 0, srcY, canvas.width, tailH, 0, dstY, canvas.width, tailH);
       }
 
-      // 裁剪时同步更新注解和图层坐标
       transformAnnotations(ranges);
       transformPastedImages(ranges);
 
@@ -2284,8 +2418,104 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(newCanvas, 0, 0);
       imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      cutRanges = [];
+      return { removed, count: ranges.length, axis: "Y" };
+    }
+
+    function doCutX() {
+      const ranges = mergeRangesX(cutRangesX);
+      const removed = totalSelectedWidth(ranges);
+      if (removed <= 0 || removed >= canvas.width) {
+        setStatus("选中宽度无效，无法删除整个图片。");
+        return false;
+      }
+      commitPastedImagesToBase();
+
+      const oldCanvas = document.createElement("canvas");
+      oldCanvas.width = canvas.width;
+      oldCanvas.height = canvas.height;
+      oldCanvas.getContext("2d").putImageData(imageData, 0, 0);
+
+      const gapTotal = CUT_GAP_PX * ranges.length;
+      const newW = canvas.width - removed + gapTotal;
+      const newCanvas = document.createElement("canvas");
+      newCanvas.width = newW;
+      newCanvas.height = canvas.height;
+      const nctx = newCanvas.getContext("2d");
+      const oldCtx = oldCanvas.getContext("2d");
+
+      let srcX = 0;
+      let dstX = 0;
+      for (const r of ranges) {
+        const keepW = r.x1 - srcX;
+        if (keepW > 0) {
+          nctx.drawImage(oldCanvas, srcX, 0, keepW, canvas.height, dstX, 0, keepW, canvas.height);
+          dstX += keepW;
+        }
+        nctx.fillStyle = pickGapColor(oldCtx, canvas.width, canvas.height, false, r.x1);
+        nctx.fillRect(dstX, 0, CUT_GAP_PX, canvas.height);
+        dstX += CUT_GAP_PX;
+        srcX = r.x2;
+      }
+      const tailW = canvas.width - srcX;
+      if (tailW > 0) {
+        nctx.drawImage(oldCanvas, srcX, 0, tailW, canvas.height, dstX, 0, tailW, canvas.height);
+      }
+
+      transformAnnotationsX(ranges);
+      transformPastedImagesX(ranges);
+
+      canvas.width = newCanvas.width;
+      canvas.height = newCanvas.height;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(newCanvas, 0, 0);
+      imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      cutRangesX = [];
+      return { removed, count: ranges.length, axis: "X" };
+    }
+
+    function doCut() {
+      if (!imageData || !hasSelection()) return;
+      const willCutY = cutRanges.length > 0;
+      const willCutX = cutRangesX.length > 0;
+      if (!willCutY && !willCutX) return;
+
+      if (willCutY) {
+        const rangesY = mergeRanges(cutRanges);
+        const removedY = totalSelectedHeight(rangesY);
+        if (removedY <= 0 || removedY >= canvas.height) {
+          setStatus("选中高度无效，无法删除整个图片。");
+          return;
+        }
+      }
+      if (willCutX) {
+        const rangesX = mergeRangesX(cutRangesX);
+        const removedX = totalSelectedWidth(rangesX);
+        if (removedX <= 0 || removedX >= canvas.width) {
+          setStatus("选中宽度无效，无法删除整个图片。");
+          return;
+        }
+      }
+
+      pushUndoState();
+      const results = [];
+      if (willCutY) {
+        const res = doCutY();
+        if (!res) return;
+        results.push(res);
+      }
+      if (willCutX) {
+        const res = doCutX();
+        if (!res) return;
+        results.push(res);
+      }
+
       clearSelection();
-      setStatus(`已删除 ${removed}px（${ranges.length} 段），并插入 ${ranges.length} 条 ${CUT_GAP_PX}px 裁剪缝`);
+      const msg = results.map((r) => {
+        const label = r.axis === "Y" ? "高度" : "宽度";
+        return `${label} ${r.removed}px（${r.count} 段）`;
+      }).join("，");
+      setStatus(`已删除 ${msg}，并插入 ${CUT_GAP_PX}px 裁剪缝`);
       render();
     }
 
@@ -2315,6 +2545,35 @@
         }
       }
       return oldY - offset;
+    }
+
+    function transformAnnotationsX(ranges) {
+      for (const ann of annotations) {
+        if (ann.type === "number" || ann.type === "text") {
+          ann.pos.x = calculateNewX(ann.pos.x, ranges);
+        } else if (ann.type === "arrow" || ann.type === "line" || ann.type === "rect" || ann.type === "circle") {
+          ann.from.x = calculateNewX(ann.from.x, ranges);
+          ann.to.x = calculateNewX(ann.to.x, ranges);
+        }
+      }
+    }
+
+    function transformPastedImagesX(ranges) {
+      for (const layer of pastedImages) {
+        layer.x = calculateNewX(layer.x, ranges);
+      }
+    }
+
+    function calculateNewX(oldX, ranges) {
+      let offset = 0;
+      for (const r of ranges) {
+        if (oldX > r.x2) {
+          offset += (r.x2 - r.x1) - CUT_GAP_PX;
+        } else if (oldX >= r.x1 && oldX <= r.x2) {
+          offset += (oldX - r.x1);
+        }
+      }
+      return oldX - offset;
     }
 
     btnReset.addEventListener("click", () => {
