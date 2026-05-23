@@ -497,7 +497,7 @@
     let isShiftPressed = false;
     let lastPointerCanvasPoint = null;
     let hasMovedDuringDrag = false;
-    const CUT_GAP_PX = 1;
+    const CUT_GAP_PX = 2;
     const CUT_GAP_COLOR = "#ffffff";
     const MOSAIC_BLOCK = 12;
     const MOSAIC_BLUR_RADIUS = 8;
@@ -2195,11 +2195,6 @@
         setStatus("选中高度无效，无法删除整个图片。");
         return;
       }
-      if (removed > 200) {
-        if (!confirm(`确定要删除 ${removed}px（${ranges.length} 段）吗？此操作可撤销。`)) {
-          return;
-        }
-      }
       pushUndoState();
       commitPastedImagesToBase();
 
@@ -2219,28 +2214,53 @@
 
       let srcY = 0;
       let dstY = 0;
+      const oldCtx = oldCanvas.getContext("2d");
+
       for (const r of ranges) {
         const keepH = r.y1 - srcY;
         if (keepH > 0) {
           nctx.drawImage(oldCanvas, 0, srcY, canvas.width, keepH, 0, dstY, canvas.width, keepH);
           dstY += keepH;
         }
-        // 自适应缝隙颜色：取缝隙上下边缘的像素均值
-        if (ranges.length === 1) {
-          const oldCtx = oldCanvas.getContext("2d");
-          const topPixels = oldCtx.getImageData(0, Math.max(0, r.y1 - 1), canvas.width, 1).data;
-          const botPixels = oldCtx.getImageData(0, Math.min(canvas.height - 1, r.y1), canvas.width, 1).data;
-          let tr = 0, tg = 0, tb = 0;
-          let br = 0, bg = 0, bb = 0;
-          const step = Math.max(1, Math.floor(canvas.width / 100));
-          for (let i = 0; i < canvas.width; i += step) {
-            const ti = i * 4;
-            tr += topPixels[ti]; tg += topPixels[ti + 1]; tb += topPixels[ti + 2];
-            br += botPixels[ti]; bg += botPixels[ti + 1]; bb += botPixels[ti + 2];
-          }
-          const cnt = Math.floor(canvas.width / step);
-          nctx.fillStyle = `rgb(${Math.round((tr + br) / 2 / cnt)},${Math.round((tg + bg) / 2 / cnt)},${Math.round((tb + bb) / 2 / cnt)})`;
+        
+        // 自适应缝隙颜色并且与底色区分
+        const topY = Math.max(0, r.y1 - 1);
+        const botY = Math.min(canvas.height - 1, r.y2);
+        
+        const topPixels = oldCtx.getImageData(0, topY, canvas.width, 1).data;
+        const botPixels = oldCtx.getImageData(0, botY, canvas.width, 1).data;
+        
+        let tr = 0, tg = 0, tb = 0;
+        let br = 0, bg = 0, bb = 0;
+        const step = Math.max(1, Math.floor(canvas.width / 100));
+        let cnt = 0;
+        for (let i = 0; i < canvas.width; i += step) {
+          const ti = i * 4;
+          tr += topPixels[ti]; tg += topPixels[ti + 1]; tb += topPixels[ti + 2];
+          br += botPixels[ti]; bg += botPixels[ti + 1]; bb += botPixels[ti + 2];
+          cnt++;
         }
+        
+        let rAvg = Math.round((tr + br) / 2 / cnt);
+        let gAvg = Math.round((tg + bg) / 2 / cnt);
+        let bAvg = Math.round((tb + bb) / 2 / cnt);
+
+        // 计算感知亮度 (Luminance)
+        const L = 0.299 * rAvg + 0.587 * gAvg + 0.114 * bAvg;
+        
+        // 如果是浅底色 (L > 128)，则调深 30（偏向灰色）；如果是深底色，则调浅 30（偏向灰色）
+        if (L > 128) {
+          rAvg = Math.max(0, rAvg - 30);
+          gAvg = Math.max(0, gAvg - 30);
+          bAvg = Math.max(0, bAvg - 30);
+        } else {
+          rAvg = Math.min(255, rAvg + 30);
+          gAvg = Math.min(255, gAvg + 30);
+          bAvg = Math.min(255, bAvg + 30);
+        }
+
+        nctx.fillStyle = `rgb(${rAvg},${gAvg},${bAvg})`;
+        
         nctx.fillRect(0, dstY, canvas.width, CUT_GAP_PX);
         dstY += CUT_GAP_PX;
         srcY = r.y2;
