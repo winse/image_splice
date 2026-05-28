@@ -504,6 +504,24 @@
     let hasMovedDuringDrag = false;
     const CUT_GAP_PX = 2;
     const CUT_GAP_COLOR = "#ffffff";
+
+    function getCutGapForRangeY(range, canvasHeight) {
+      if (range.y1 <= 0 || range.y2 >= canvasHeight) return 0;
+      return CUT_GAP_PX;
+    }
+
+    function getCutGapForRangeX(range, canvasWidth) {
+      if (range.x1 <= 0 || range.x2 >= canvasWidth) return 0;
+      return CUT_GAP_PX;
+    }
+
+    function totalCutGapY(ranges, canvasHeight) {
+      return ranges.reduce((sum, r) => sum + getCutGapForRangeY(r, canvasHeight), 0);
+    }
+
+    function totalCutGapX(ranges, canvasWidth) {
+      return ranges.reduce((sum, r) => sum + getCutGapForRangeX(r, canvasWidth), 0);
+    }
     const MOSAIC_BLOCK = 12;
     const MOSAIC_BLUR_RADIUS = 8;
     const DEFAULT_STROKE_COLOR = "#ff4d4f";
@@ -2578,13 +2596,14 @@
       }
       commitPastedImagesToBase();
 
+      const canvasHeight = canvas.height;
       const oldCanvas = document.createElement("canvas");
       oldCanvas.width = canvas.width;
-      oldCanvas.height = canvas.height;
+      oldCanvas.height = canvasHeight;
       oldCanvas.getContext("2d").putImageData(imageData, 0, 0);
 
-      const gapTotal = CUT_GAP_PX * ranges.length;
-      const newH = canvas.height - removed + gapTotal;
+      const gapTotal = totalCutGapY(ranges, canvasHeight);
+      const newH = canvasHeight - removed + gapTotal;
       const newCanvas = document.createElement("canvas");
       newCanvas.width = canvas.width;
       newCanvas.height = newH;
@@ -2599,18 +2618,21 @@
           nctx.drawImage(oldCanvas, 0, srcY, canvas.width, keepH, 0, dstY, canvas.width, keepH);
           dstY += keepH;
         }
-        nctx.fillStyle = pickGapColor(oldCtx, canvas.width, canvas.height, true, r.y1);
-        nctx.fillRect(0, dstY, canvas.width, CUT_GAP_PX);
-        dstY += CUT_GAP_PX;
+        const gap = getCutGapForRangeY(r, canvasHeight);
+        if (gap > 0) {
+          nctx.fillStyle = pickGapColor(oldCtx, canvas.width, canvasHeight, true, r.y1);
+          nctx.fillRect(0, dstY, canvas.width, gap);
+          dstY += gap;
+        }
         srcY = r.y2;
       }
-      const tailH = canvas.height - srcY;
+      const tailH = canvasHeight - srcY;
       if (tailH > 0) {
         nctx.drawImage(oldCanvas, 0, srcY, canvas.width, tailH, 0, dstY, canvas.width, tailH);
       }
 
-      transformAnnotations(ranges);
-      transformPastedImages(ranges);
+      transformAnnotations(ranges, canvasHeight);
+      transformPastedImages(ranges, canvasHeight);
 
       canvas.width = newCanvas.width;
       canvas.height = newCanvas.height;
@@ -2618,7 +2640,7 @@
       ctx.drawImage(newCanvas, 0, 0);
       imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       cutRanges = [];
-      return { removed, count: ranges.length, axis: "Y" };
+      return { removed, count: ranges.length, axis: "Y", gapTotal };
     }
 
     function doCutX() {
@@ -2630,13 +2652,14 @@
       }
       commitPastedImagesToBase();
 
+      const canvasWidth = canvas.width;
       const oldCanvas = document.createElement("canvas");
-      oldCanvas.width = canvas.width;
+      oldCanvas.width = canvasWidth;
       oldCanvas.height = canvas.height;
       oldCanvas.getContext("2d").putImageData(imageData, 0, 0);
 
-      const gapTotal = CUT_GAP_PX * ranges.length;
-      const newW = canvas.width - removed + gapTotal;
+      const gapTotal = totalCutGapX(ranges, canvasWidth);
+      const newW = canvasWidth - removed + gapTotal;
       const newCanvas = document.createElement("canvas");
       newCanvas.width = newW;
       newCanvas.height = canvas.height;
@@ -2651,18 +2674,21 @@
           nctx.drawImage(oldCanvas, srcX, 0, keepW, canvas.height, dstX, 0, keepW, canvas.height);
           dstX += keepW;
         }
-        nctx.fillStyle = pickGapColor(oldCtx, canvas.width, canvas.height, false, r.x1);
-        nctx.fillRect(dstX, 0, CUT_GAP_PX, canvas.height);
-        dstX += CUT_GAP_PX;
+        const gap = getCutGapForRangeX(r, canvasWidth);
+        if (gap > 0) {
+          nctx.fillStyle = pickGapColor(oldCtx, canvasWidth, canvas.height, false, r.x1);
+          nctx.fillRect(dstX, 0, gap, canvas.height);
+          dstX += gap;
+        }
         srcX = r.x2;
       }
-      const tailW = canvas.width - srcX;
+      const tailW = canvasWidth - srcX;
       if (tailW > 0) {
         nctx.drawImage(oldCanvas, srcX, 0, tailW, canvas.height, dstX, 0, tailW, canvas.height);
       }
 
-      transformAnnotationsX(ranges);
-      transformPastedImagesX(ranges);
+      transformAnnotationsX(ranges, canvasWidth);
+      transformPastedImagesX(ranges, canvasWidth);
 
       canvas.width = newCanvas.width;
       canvas.height = newCanvas.height;
@@ -2670,7 +2696,7 @@
       ctx.drawImage(newCanvas, 0, 0);
       imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       cutRangesX = [];
-      return { removed, count: ranges.length, axis: "X" };
+      return { removed, count: ranges.length, axis: "X", gapTotal };
     }
 
     function doCut() {
@@ -2714,31 +2740,37 @@
         const label = r.axis === "Y" ? "高度" : "宽度";
         return `${label} ${r.removed}px（${r.count} 段）`;
       }).join("，");
-      setStatus(`已删除 ${msg}，并插入 ${CUT_GAP_PX}px 裁剪缝`);
+      const gapTotal = results.reduce((sum, r) => sum + (r.gapTotal || 0), 0);
+      if (gapTotal > 0) {
+        setStatus(`已删除 ${msg}，并插入 ${gapTotal}px 裁剪缝`);
+      } else {
+        setStatus(`已删除 ${msg}（边缘裁剪，无合并缝）`);
+      }
       render();
     }
 
 
-    function transformAnnotations(ranges) {
+    function transformAnnotations(ranges, canvasHeight) {
       for (const ann of annotations) {
         if (ann.type === "number" || ann.type === "text") {
-          ann.pos.y = calculateNewY(ann.pos.y, ranges);
+          ann.pos.y = calculateNewY(ann.pos.y, ranges, canvasHeight);
         } else if (ann.type === "arrow" || ann.type === "line" || ann.type === "rect" || ann.type === "circle") {
-          ann.from.y = calculateNewY(ann.from.y, ranges);
-          ann.to.y = calculateNewY(ann.to.y, ranges);
+          ann.from.y = calculateNewY(ann.from.y, ranges, canvasHeight);
+          ann.to.y = calculateNewY(ann.to.y, ranges, canvasHeight);
         }
       }
     }
-    function transformPastedImages(ranges) {
+    function transformPastedImages(ranges, canvasHeight) {
       for (const layer of pastedImages) {
-        layer.y = calculateNewY(layer.y, ranges);
+        layer.y = calculateNewY(layer.y, ranges, canvasHeight);
       }
     }
-    function calculateNewY(oldY, ranges) {
+    function calculateNewY(oldY, ranges, canvasHeight) {
       let offset = 0;
       for (const r of ranges) {
+        const gap = getCutGapForRangeY(r, canvasHeight);
         if (oldY > r.y2) {
-          offset += (r.y2 - r.y1) - CUT_GAP_PX;
+          offset += (r.y2 - r.y1) - gap;
         } else if (oldY >= r.y1 && oldY <= r.y2) {
           offset += (oldY - r.y1);
         }
@@ -2746,28 +2778,29 @@
       return oldY - offset;
     }
 
-    function transformAnnotationsX(ranges) {
+    function transformAnnotationsX(ranges, canvasWidth) {
       for (const ann of annotations) {
         if (ann.type === "number" || ann.type === "text") {
-          ann.pos.x = calculateNewX(ann.pos.x, ranges);
+          ann.pos.x = calculateNewX(ann.pos.x, ranges, canvasWidth);
         } else if (ann.type === "arrow" || ann.type === "line" || ann.type === "rect" || ann.type === "circle") {
-          ann.from.x = calculateNewX(ann.from.x, ranges);
-          ann.to.x = calculateNewX(ann.to.x, ranges);
+          ann.from.x = calculateNewX(ann.from.x, ranges, canvasWidth);
+          ann.to.x = calculateNewX(ann.to.x, ranges, canvasWidth);
         }
       }
     }
 
-    function transformPastedImagesX(ranges) {
+    function transformPastedImagesX(ranges, canvasWidth) {
       for (const layer of pastedImages) {
-        layer.x = calculateNewX(layer.x, ranges);
+        layer.x = calculateNewX(layer.x, ranges, canvasWidth);
       }
     }
 
-    function calculateNewX(oldX, ranges) {
+    function calculateNewX(oldX, ranges, canvasWidth) {
       let offset = 0;
       for (const r of ranges) {
+        const gap = getCutGapForRangeX(r, canvasWidth);
         if (oldX > r.x2) {
-          offset += (r.x2 - r.x1) - CUT_GAP_PX;
+          offset += (r.x2 - r.x1) - gap;
         } else if (oldX >= r.x1 && oldX <= r.x2) {
           offset += (oldX - r.x1);
         }
